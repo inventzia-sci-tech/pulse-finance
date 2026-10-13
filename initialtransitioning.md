@@ -219,6 +219,72 @@ Until that test exists and passes, the installation criterion is **open**. If it
 the fix is to improve extension packaging once, in pulse-data / `jpype_host`, not to move the schemas
 into core.
 
+### Proposed design for the installation criterion
+
+**Status: proposed, not implemented. One part needs a change in pulse-beacon, so it is not
+pulse-finance's decision alone.**
+
+#### What already exists
+
+`jpype_host.resolve_classpath()` resolves beacon's classpath three ways, in order: an explicit
+`jars_dir`; else a **shaded runtime jar bundled in the installed wheel**
+(`inventzia.pulse.beacon._runtime/pulse-beacon-runtime.jar`, located via `importlib.resources`,
+staged by `build-runtime-jar.sh`); else staged jars in a source checkout. Beacon has therefore
+already solved this for itself. What it has no path for is **anyone else's** jar, which is exactly
+why `pulse-ext-example` falls back to `extra_classpath` and why the criterion is still open.
+
+#### Recommendation: a classpath-contribution entry point in pulse-beacon
+
+A domain package ships its jar as wheel package data and declares an entry point;
+`resolve_classpath()` consults that group and appends what it finds. Application code then calls
+`start_jvm()` with no arguments and passes no paths.
+
+**Why not the simpler option**, which is for finance to provide its own bootstrap calling
+`start_jvm(extra_classpath=[its own jar])`: it does not compose. A JVM's classpath is fixed once
+started, and `start_jvm` already documents the failure in its own error text, which says that a
+caller adding jars to a running JVM must instead have passed the full classpath, including every
+extension jar, before any other JPype use. With one bootstrap per package, finance and a broker
+adapter become mutually exclusive: whichever starts the JVM first wins and the other package's types
+cannot be loaded. Broker adapters are named in the ownership model above, so this is not
+hypothetical.
+
+There is also a symmetry argument. Type discovery is **already** an entry point
+(`inventzia.pulse.datum_types`). Without the matching mechanism for jars, the Python side can
+discover a provider whose Java classes the JVM cannot load, and the cross-language type-universe
+gate reports that as a mismatch without explaining the cause.
+
+#### Finance's jar must be thin, not shaded
+
+Measured against beacon's bundled jar: 2,213 entries, embedding pulse-data (22 entries, including
+`DatumTypeRegistry`, `DatumTypeProvider` and `CoreDatumTypeProvider`), Jackson (1,185) and jspecify.
+If finance shaded those in as well, two copies of `DatumTypeProvider` would sit on the classpath and
+`FinanceDatumTypeProvider` compiled against one would be rejected by the registry loaded from the
+other, as `ServiceConfigurationError: not a subtype`. A thin jar is also sufficient, because beacon's
+fat jar already supplies Jackson and pulse-data.
+
+Related detail worth recording: beacon's jar carries **no**
+`META-INF/services/com.inventzia.pulse.data.datum.DatumTypeProvider` entry, consistent with core
+being seeded directly rather than discovered. Finance's services entry therefore remains the only
+one, and the namespace check still applies to it.
+
+#### The three changes
+
+| # | Repository | Change |
+|---|---|---|
+| 1 | **pulse-beacon** | New entry-point group. `resolve_classpath()` appends contributed jars after its own, and names them in the returned source description so a failure is diagnosable. Small, additive, backward compatible. |
+| 2 | **pulse-finance** | `mvn package` output staged into `inventzia/pulse/finance/_runtime/`, declared as `package-data`, plus the entry point. Mirrors beacon's `_runtime` pattern without the shading. |
+| 3 | **pulse-finance** | Fill in the release-gated placeholders in `tests/test_installation.py`: build wheel and jar, install into a venv **outside** the checkout with no Maven available, run a Python to Java to Python finance-event round trip asserting exact decimal equality, and assert the application code contains no `extra_classpath` and no path into a `target/` directory. |
+
+#### Consequences
+
+Change 1 is cross-repository and needs a pulse-beacon release before pulse-finance can depend on it,
+so it is wider in scope than the rest of this work. It is the "improve extension packaging once"
+case: every future domain package gets the same behaviour for free.
+
+The fallback, if the blast radius must stay inside pulse-finance, is the bootstrap-per-package
+option. It would pass the installed-wheel test today and hit the composition wall as soon as a second
+domain package exists. The entry point is the better outcome.
+
 ### Generator defects found for out-of-repo ownership
 
 Two small pulse-data bugs, both invisible while core was the only consumer. Each is an
@@ -317,13 +383,16 @@ Retained for the record, but **not** to be implemented as written:
 
 ### Implementation status
 
+Status refreshed on **2026-10-13** against committed baseline `7e83a58`. Local verification is
+recorded below; remote CI and installed-package acceptance have not been verified in this review.
+
 | Item | State |
 |---|---|
 | Package skeleton | **Done.** `core/java/pom.xml` (`pulse-finance-core` 0.1.0-SNAPSHOT, **release 17** matching pulse-data and pulse-beacon), `position`/`portfolio` packages, Python namespace. |
 | Provider packaging | **Machinery done and live, installation criterion open.** `regen.sh` (+ `--check`), one authoritative pin in `generator.pin`, Python entry point and Java `META-INF/services` both enabled. Discovery is proven from a classpath; from an installed wheel + JAR it is not. |
 | First schema | **Done.** `Position` v1, confirmed field-by-field with the original author. Generated in both languages, `TYPE_ID` namespace-valid, every field exactly `StorageMapping`-representable. |
 | Shared accounting fixtures | **Done.** `tests/fixtures/position_accounting.json`: repository level, consumed by both test suites, **13 cases / 25 checkpoints**, including a recurring VWAP and a multiplied contract (CL at 1000). |
-| Pure accounting kernel | **Done and green.** `PositionTracker`, `TradeOutcome`, `Side`, `PositionSnapshot`: no Beacon, no persistence, no clock. **31 tests pass.** D2's numerical policy is implemented (scale 12 `HALF_EVEN`), and both realized and unrealized PnL are computed from the signed notional rather than a divided VWAP. |
+| Pure accounting kernel | **Implemented and green; domain-contract confirmation still open.** `PositionTracker`, `TradeOutcome`, `Side`, `PositionSnapshot`: no Beacon, no persistence, no clock. **31 tests pass.** D2's numerical policy is implemented (scale 12 `HALF_EVEN`), and both realized and unrealized PnL are computed from the signed notional rather than a divided VWAP. |
 | CI | **Done.** `contracts`, `generator-pin`, `maven`, and a tag-gated `release` job that sets `PULSE_FINANCE_RELEASE=1`. |
 | `PositionState` schema | **Not written.** Specified in `docs/spec-position-state.md`, pending confirmation and D2/D4. |
 | Remaining events + actor wrapper | **Blocked on D1–D5**, deliberately. Specified in `docs/spec-accounting-decisions.md`. |
@@ -365,12 +434,16 @@ developer.
 
 ### Verification
 
-**The Java module builds and its suite is green**: `mvn -B -ntp verify` →
-**27 tests, 0 failures, 0 errors, 0 skipped, BUILD SUCCESS** (openjdk 17.0.18, Maven 3.9.16, both
-in the `pulse` conda env: *not* on the base PATH, which is why an earlier pass in this work
-wrongly reported "no JDK in this environment" and left the Java side unverified for an exchange).
+**Local verification on 2026-10-13:**
 
-- **Accounting**: 11 dynamic fixture cases + 11 unit tests in `PositionTrackerFixtureTest`,
+- Java: `mvn -o -B -ntp -f core/java/pom.xml verify` using the `pulse` conda environment:
+  **31 tests, 0 failures, 0 errors, 0 skipped, BUILD SUCCESS**.
+- Python: `python -m pytest -q -p no:cacheprovider tests`: **19 passed, 4 skipped**. The four
+  installation tests remain placeholders, not evidence of installed-package acceptance.
+- `python scripts/check_versions.py`: passed, development versions agree.
+- `bash regen.sh --check`: passed, committed bindings match the pinned generators.
+
+- **Accounting**: 13 dynamic fixture cases + 13 unit tests in `PositionTrackerFixtureTest`,
   including one regression test per review finding.
 - **SPI discovery**: `FinanceDatumTypeProviderTest` (5 tests) proves the registry resolves
   `Position` by `TYPE_ID` **from the classpath alone**: nothing calls `DatumTypeRegistry.of(...)`;
@@ -380,7 +453,7 @@ wrongly reported "no JDK in this environment" and left the Java side unverified 
 - **Shared fixtures reach the Java classpath** via `<testResources>`, confirmed in the build log:
   *"Copying 1 resource from ../../tests/fixtures to target/test-classes/fixtures"*.
 
-**Both new tests were mutation-tested**, because a green suite proves nothing on its own:
+**Previously recorded mutation checks** (not repeated in the 2026-10-13 status refresh):
 
 | Mutation | Result |
 |---|---|
@@ -400,41 +473,61 @@ the primary evidence; the Java suite is.
 
 | Path | Lines | |
 |---|---|---|
-| `core/java/.../position/PositionTracker.java` | 483 | the accounting kernel |
-| `core/java/.../position/{TradeOutcome,PositionSnapshot,Side}.java` | 171 | case decomposition, restore record, side |
+| `core/java/.../position/PositionTracker.java` | 554 | the accounting kernel |
+| `core/java/.../position/{TradeOutcome,PositionSnapshot,Side}.java` | 189 | case decomposition, restore record, side |
 | `core/java/.../schemas/{Position,FinanceDatumTypeProvider}.java` | 125 | **generated** |
-| `core/java/.../position/PositionTrackerFixtureTest.java` | 378 | 11 fixture cases + 11 unit tests |
+| `core/java/.../position/PositionTrackerFixtureTest.java` | 457 | 13 fixture cases + 13 unit tests |
 | `core/java/.../schemas/FinanceDatumTypeProviderTest.java` | 97 | SPI discovery, mutation-tested |
 | `schemas/position.yaml` | 113 | owned here; carries its own conversion contract |
 | `src/inventzia/pulse/finance/schemas/*.py` | 93 | **generated** |
-| `tests/fixtures/position_accounting.json` | 272 | 11 cases / 20 checkpoints, cross-language |
-| `tests/test_{fixtures_consistency,installation}.py` | 319 | identity check + release-gated criterion |
+| `tests/fixtures/position_accounting.json` | 666 | 13 cases / 25 checkpoints, cross-language |
+| `tests/test_{fixtures_consistency,installation}.py` | 329 | identity check + release-gated criterion |
 | `regen.sh`, `generator.pin`, `scripts/check_versions.py` | 252 | build metadata, one authoritative pin |
-| `.github/workflows/ci.yml` | 184 | 4 jobs, release gated |
+| `.github/workflows/ci.yml` | 189 | 4 jobs, release gated |
 
 ### Open
 
-1. **The installation criterion**: the one real gap. Java discovery works from a classpath, not from
-   an installed wheel + JAR in a clean environment outside the checkout. The release gate correctly
-   fails on it (`PULSE_FINANCE_RELEASE=1` → 4 hard failures). Self-contained, and now cheap to do
-   since the artifacts build.
-2. **D1–D5 unsettled**: see `docs/spec-accounting-decisions.md`, which proposes a concrete narrow
-   answer for each rather than restating the questions.
-3. **`PositionState` not yet ported**: see `docs/spec-position-state.md`.
-4. **Not started**: actor wrapper (needs D5), portfolio layer, the two pulse-data packaging fixes
-   found above, and enum support for `PositionPoint`.
-5. **Nothing committed.** Every path in the inventory is untracked.
+1. **Installation acceptance**: discovery works from a classpath, but the installed wheel + JAR
+   experience is not implemented or verified in a clean environment outside the checkout. The four
+   acceptance tests skip during development and are configured to fail in release mode. A design is
+   proposed in [Proposed design for the installation criterion](#proposed-design-for-the-installation-criterion);
+   it needs a decision, because one of its three changes lands in pulse-beacon.
+2. **D1–D5 confirmation**: the proposals in `docs/spec-accounting-decisions.md` need explicit
+   decisions. Implemented numerical behaviour is evidence for those decisions, not confirmation of
+   the entire contract. D2 still needs supported input scales/magnitudes, settlement semantics and
+   persistence round-trip verification; D4 still has six protocol questions explicitly open.
+3. **PositionState**: the published-view schema is not written. Its spec needs F1–F4 confirmation
+   and settled D2/D4 requirements. PositionCheckpoint remains a separate recovery contract; the
+   existing in-memory PositionSnapshot does not supply a complete durable replay protocol.
+4. **Later integration**: actor wrapper, essential-actor failure propagation in Beacon, portfolio
+   layer and the documented generator/packaging improvements. Enum support is optional for the
+   initial string-code representation, not a prerequisite for PositionState.
+
+**Repository baseline:** implementation, specs and build scaffolding are now committed. The working
+tree was clean at the start of this status refresh; the earlier "nothing committed" note is obsolete.
 
 ### Next
 
-Commit the current green state as a baseline, then either close the installation criterion
-(self-contained, unblocks the release gate) or settle D1–D5 and write `PositionState`. The
-installation work depends on nothing; `PositionState`'s shape depends on D2 and D4, so the specs come
-first either way.
+Proceed in this order:
 
-The kernel exists to make those decisions concrete rather than theoretical: D1 is already a
-constructor argument (`multiplier`), and D2 surfaces as an `ArithmeticException` at exactly the point
-a rounding policy is needed instead of being guessed at.
+1. **Close the installation criterion.** Build and install the distributions in a fresh environment
+   outside the checkout. Prove Python and Java provider discovery and an exact finance-event round
+   trip without Maven, source-tree paths or application-level classpath/registry manipulation.
+   Replace the four placeholders with real tests that pass in release mode. This work can proceed
+   independently of D1–D5.
+2. **Confirm D1–D5.** Record the accepted scope and policies in the accounting spec, distinguishing
+   implemented decisions from deferred capabilities. In particular, finish D2's persistence and
+   settlement contract and decide D4's sequence scope/order, atomic checkpoint boundary, fee
+   deduplication, collection storage, instrument metadata versioning and ID-retention guarantees.
+   Confirm D5 before designing the actor wrapper.
+3. **Implement PositionState once D2/D4 are settled and F1–F4 are confirmed.** Write its YAML,
+   generate both bindings, define the kernel-to-view conversion and test decimal/SQL round trips.
+   Keep it a published view; do not use it as a recovery record or treat its completion as completion
+   of PositionCheckpoint persistence.
+
+The corrected notional-based arithmetic, scale-12 HALF_EVEN division, atomic trade application and
+int64 range checks are already implemented and tested. The next numerical work is confirmation and
+persistence verification, not replacing the former exact-or-throw implementation again.
 
 ---
 

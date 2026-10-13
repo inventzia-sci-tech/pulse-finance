@@ -174,7 +174,7 @@ gross trading PnL at exactly **0** while equity falls by **15**. Only the four-t
 kernel, not a data problem, and callers should treat it as fatal.
 
 **What pins it.** `reconciliationDiscrepancy()` is asserted zero at **every** checkpoint of every
-fixture (20 of them), not only at the end. Plus the Python identity check, which validates the
+fixture (25 of them), not only at the end. Plus the Python identity check, which validates the
 fixtures themselves independently of any implementation.
 
 ---
@@ -289,7 +289,7 @@ rather than assumed. Plus the same test with several events at one timestamp.
 | # | Recommendation | Kernel change needed |
 |---|---|---|
 | D1 | `InstrumentSpec` beside the events; whole-unit quantities in v1 | none (multiplier is already a constructor argument) |
-| D2 | exact addition; division at scale 12 `HALF_EVEN`; persisted 12; presentation per-currency | **yes**: replace exact-or-throw, move realized PnL onto the notional |
+| D2 | exact addition; division at scale 12 `HALF_EVEN`; persisted 12; presentation per-currency | **Implemented**: scale-12 division and notional-based PnL; policy confirmation and persistence verification remain open |
 | D3 | the four-term identity | none (implemented and enforced) |
 | D4 | triple identity; execution + fee ids; `(eventTime, sequence)` boundary | **yes**, and six items remain unspecified; not yet a protocol |
 | D5 | event-driven; synchronous read is an unguaranteed convenience | none yet (actor wrapper does not exist) |
