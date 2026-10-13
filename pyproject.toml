@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Inventzia-Commercial
+# Copyright (c) 2013-2026 Magrino Bini, Paola Apruzzese, Inventzia Science and Technology Ltd.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pulse-finance"
+version = "0.1.0.dev0"
+description = "Financial domain for Pulse: position accounting, PnL, portfolio analytics, execution and exchange simulation."
+requires-python = ">=3.11"
+dependencies = ["pulse-data>=0.4.0"]
+
+[project.urls]
+Homepage = "https://inventzia.com"
+
+# Automatic provider discovery: pulse-data's registry reads this group via
+# importlib.metadata.entry_points(). An ordinary `pip install pulse-finance` is all a
+# consuming application needs — no manual registry manipulation. The Java side is the
+# matching META-INF/services entry in core/java/src/main/resources.
+#
+[project.entry-points."inventzia.pulse.datum_types"]
+finance = "inventzia.pulse.finance.schemas.provider:FinanceDatumTypeProvider"
+
+# PEP 420 namespace packages, sharing the inventzia.pulse.* prefix with pulse-data.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["inventzia*"]
+namespaces = true

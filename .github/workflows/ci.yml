@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # pulse-finance depends on pulse-data (datum contract, schema generators) and
+  # pulse-beacon-core (engine, actors). Neither is published, so both are checked out as
+  # siblings and installed into the local .m2, the same pattern pulse-beacon uses for
+  # pulse-data. Set CI_PAT in repo secrets if either is private (else GITHUB_TOKEN).
+  #
+  # Dependency refs are pinned INDEPENDENTLY of finance's own tag. An earlier version
+  # resolved both repositories at ${{ github.ref_name }}, which is wrong: finance v0.1.0 says
+  # nothing about which pulse-data or pulse-beacon commit it needs, and those repositories
+  # have no v0.1.0 tag at all. The generator revision is not configured here either - it has
+  # one authoritative home in generator.pin, which the generator-pin job reads directly.
+  PULSE_DATA_REPO: inventzia-sci-tech/pulse-data
+  PULSE_BEACON_REPO: inventzia-sci-tech/pulse-beacon
+  # Both currently track main because pulse-data and pulse-beacon are unreleased
+  # (0.4.0-SNAPSHOT). The release job refuses to publish while either is still 'main'.
+  PULSE_DATA_REF: main
+  PULSE_BEACON_REF: main
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Cheap, dependency-free gates. These run on every push and need no checkout of
+  # pulse-data or pulse-beacon, so a contract or metadata mistake fails in seconds.
+  # ---------------------------------------------------------------------------
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The accounting fixtures are the spec for D1-D5. An unsound fixture is worse than
+      # no fixture, so their internal consistency is checked before anything else.
+      - name: Accounting fixtures satisfy the reconciliation identity
+        run: python tests/test_fixtures_consistency.py
+
+      # Maven -SNAPSHOT and PEP 440 .devN must agree on the base version. Catches the
+      # release-day slip where one side is bumped and the other is not.
+      - name: Version metadata is consistent across Maven and Python
+        run: python scripts/check_versions.py
+
+      - name: Test suite (fixtures + installation guards)
+        run: |
+          set -euo pipefail
+          pip install -q pytest
+          python -m pytest tests/ -q
+
+  # ---------------------------------------------------------------------------
+  # Generator reproducibility. Distinct from SPI compatibility: two generator
+  # revisions can both be SPI-1 compatible and still emit different bindings.
+  # ---------------------------------------------------------------------------
+  generator-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pulse-finance
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PULSE_DATA_REPO }}
+          ref: ${{ env.PULSE_DATA_REF }}
+          path: pulse-data
+          token: ${{ secrets.CI_PAT || github.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check out pulse-data at the revision generator.pin names
+        run: |
+          set -euo pipefail
+          rev="$(sed -n 's/^[[:space:]]*pulse_data_revision[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+                 pulse-finance/generator.pin)"
+          test -n "$rev" || { echo "no pulse_data_revision in generator.pin" >&2; exit 1; }
+          echo "generator.pin names $rev"
+          git -C pulse-data checkout --detach "$rev"
+
+      - name: Install generator dependencies
+        run: pip install -q pyyaml
+
+      # Fails on a digest mismatch, and (when there are schemas) on any difference between
+      # the committed bindings and freshly generated output.
+      - name: Committed bindings match the pinned generators
+        env:
+          PULSE_DATA_GENERATORS: ${{ github.workspace }}/pulse-data/schemas/schemas-generators
+        run: ./pulse-finance/regen.sh --check
+
+  # ---------------------------------------------------------------------------
+  # The Java module, including the accounting kernel against the shared fixtures.
+  # ---------------------------------------------------------------------------
+  maven:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pulse-finance
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PULSE_DATA_REPO }}
+          ref: ${{ env.PULSE_DATA_REF }}
+          path: pulse-data
+          token: ${{ secrets.CI_PAT || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PULSE_BEACON_REPO }}
+          ref: ${{ env.PULSE_BEACON_REF }}
+          path: pulse-beacon
+          token: ${{ secrets.CI_PAT || github.token }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'          # the ecosystem baseline; finance must not raise it
+          cache: maven
+
+      # Order matters: pulse-beacon-core depends on pulse-data.
+      - name: Install pulse-data to local .m2
+        run: mvn -B -ntp -f pulse-data/pom.xml clean install -DskipTests
+      - name: Install pulse-beacon-core to local .m2
+        run: mvn -B -ntp -f pulse-beacon/core/java/pom.xml clean install -DskipTests
+
+      - name: Verify pulse-finance-core
+        run: mvn -B -ntp -f pulse-finance/core/java/pom.xml verify
+
+  # ---------------------------------------------------------------------------
+  # Release gate. PULSE_FINANCE_RELEASE=1 turns every unproven acceptance criterion
+  # into a hard failure, so a tag cannot be cut while the installation criterion is
+  # only "skipped". See tests/test_installation.py and initialtransitioning.md.
+  # ---------------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [contracts, generator-pin, maven]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Dependency refs must be pinned to an actual commit
+        run: |
+          set -euo pipefail
+          # A name-based blocklist is not a pin: an earlier version rejected only main/master/
+          # develop, so a branch called 'release-next' sailed through and the build was no longer
+          # reproducible. Require a full 40-hex commit SHA - the only ref that cannot move.
+          fail=0
+          for v in PULSE_DATA_REF PULSE_BEACON_REF; do
+            ref="${!v}"
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "✅  $v = $ref"
+            else
+              echo "❌  $v is '$ref' — a release must pin a full 40-hex commit SHA." >&2
+              echo "    Tags and branch names can both be moved after the fact; a SHA cannot." >&2
+              echo "    Resolve it with: git ls-remote <repo> <tag-or-branch>" >&2
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Version metadata is a release, not a pre-release
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import sys, tomllib, pathlib
+          v = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          if ".dev" in v:
+              sys.exit(f"refusing to release a pre-release version: {v}")
+          print(f"release version {v}")
+          EOF
+          python scripts/check_versions.py
+
+      # The acceptance criteria must PASS here, not skip.
+      - name: Installation acceptance criteria must pass for a release
+        env:
+          PULSE_FINANCE_RELEASE: '1'
+        run: |
+          set -euo pipefail
+          pip install -q pytest
+          python -m pytest tests/ -q

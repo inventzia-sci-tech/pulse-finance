@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Inventzia-Commercial
+  Copyright (c) 2013-2026 Magrino Bini, Paola Apruzzese, Inventzia Science and Technology Ltd.
+
+  This file is part of pulse-finance.
+
+  pulse-finance is dual-licensed:
+    - Under the GNU Affero General Public License v3.0 or later (see LICENSE-AGPL-3.0).
+    - Under a commercial license (see LICENSE-COMMERCIAL.txt).
+      Contact operations@inventzia.com.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.inventzia.pulse</groupId>
+    <artifactId>pulse-finance-core</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>pulse-finance-core</name>
+    <description>
+        Financial domain for Pulse: position accounting, PnL, portfolio analytics,
+        execution and exchange simulation. Owns its datum schemas and contributes
+        them through pulse-data's DatumTypeProvider SPI.
+    </description>
+    <url>https://inventzia.com</url>
+    <inceptionYear>2013</inceptionYear>
+
+    <organization>
+        <name>Inventzia Science and Technology Ltd.</name>
+        <url>https://inventzia.com</url>
+    </organization>
+
+    <licenses>
+        <license>
+            <name>GNU Affero General Public License v3.0 or later</name>
+            <url>https://www.gnu.org/licenses/agpl-3.0.html</url>
+            <distribution>repo</distribution>
+        </license>
+        <license>
+            <name>Inventzia Commercial License</name>
+            <distribution>manual</distribution>
+            <comments>Contact operations@inventzia.com</comments>
+        </license>
+    </licenses>
+
+    <properties>
+        <!-- 17, matching pulse-data and pulse-beacon. Finance uses no post-17 language or
+             library feature, and raising it here would raise the runtime requirement for
+             anyone who adds finance to an existing Pulse deployment. -->
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <pulse-data.version>0.4.0-SNAPSHOT</pulse-data.version>
+        <pulse-beacon.version>0.4.0-SNAPSHOT</pulse-beacon.version>
+        <!-- The generator pin lives in ONE authoritative place: ../../generator.pin at the
+             repository root, read by regen.sh and verified in CI. It is deliberately NOT
+             duplicated as a POM property - two copies is how a pin goes stale and starts
+             lying. SPI compatibility and generator reproducibility are separate guarantees;
+             see initialtransitioning.md. -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.inventzia.pulse</groupId>
+            <artifactId>pulse-data</artifactId>
+            <version>${pulse-data.version}</version>
+        </dependency>
+        <!-- pulse-beacon-core is NOT a dependency yet, deliberately. The accounting kernel is
+             pure and the generated datum types need only pulse-data, so declaring beacon here
+             would force anyone building the kernel to build another repository first - which
+             defeats the point of keeping the accounting independent. It comes back with the
+             PositionManagerActor, once D1-D5 are settled. ${pulse-beacon.version} is retained
+             above so that reinstatement is a one-line change. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>2.18.2</version>
+        </dependency>
+
+        <!-- Reads the shared accounting fixtures (tests/fixtures/*.json). Test scope only:
+             the kernel itself has no JSON dependency. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.18.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.27.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- The accounting fixtures live at the repository root (../../tests/fixtures) and are
+             consumed by BOTH test suites: this one and tests/test_fixtures_consistency.py.
+             They specify the finance contract across languages, so there is exactly one copy
+             and neither language owns it. Mapped onto the test classpath here rather than
+             duplicated under src/test/resources. -->
+        <testResources>
+            <testResource>
+                <directory>${project.basedir}/src/test/resources</directory>
+            </testResource>
+            <testResource>
+                <directory>${project.basedir}/../../tests/fixtures</directory>
+                <targetPath>fixtures</targetPath>
+                <includes><include>*.json</include></includes>
+            </testResource>
+        </testResources>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,3 @@
+# Java-side automatic discovery: ServiceLoader reads this from the JAR, so an ordinary
+# classpath entry is all a consuming application needs - no registry manipulation.
+com.inventzia.pulse.finance.schemas.FinanceDatumTypeProvider

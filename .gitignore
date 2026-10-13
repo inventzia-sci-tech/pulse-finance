@@ -1,0 +1,15 @@
+target/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+logs/
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+.settings/
+.pytest_cache/

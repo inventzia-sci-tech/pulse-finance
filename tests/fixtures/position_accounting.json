@@ -1,0 +1,666 @@
+{
+  "fixtureVersion": 1,
+  "source": "Derived from first principles. NOT captured from the legacy implementation.",
+  "assumptions": {
+    "multiplier": "Each case declares its own `multiplier` (default \"1\"). The stored signedNotional is UNmultiplied: the multiplier scales the whole realized and unrealized expression, not one term of it. Case multiplied-contract-cl exercises CL at 1000.",
+    "arithmetic": "Exact decimal throughout. No intermediate rounding at any step, including notionals and VWAP numerators (D2 open; this is the narrowest defensible choice and the one the identity below requires).",
+    "vwapRepresentation": "vwap is reported as a per-unit price. Implementations are expected to carry signed notional internally and divide on read; the fixtures assert the observable per-unit value.",
+    "openingBaseline": "openingEquity = openingCash + openingPos * openingVwap, so opening unrealized is zero by construction.",
+    "feePolicy": "Fees reduce cash and accumulate in cumulativeFees. They do NOT reduce grossRealizedPnl (D3).",
+    "shortVwap": "A short position's vwap is the average price at which it was sold. unrealizedPnl = signedPos * (mark - vwap) therefore gives the correct sign for both directions.",
+    "signedNotional": "The accounting source of truth, asserted where a case exercises rounding. unrealizedPnl is (signedPosition * mark - signedNotional) * multiplier - EXACT, never derived from the rounded vwap. Where a case omits signedNotional it equals signedPosition * vwap exactly.",
+    "division": "D2: divisions round at scale 12, HALF_EVEN. Only two things divide - the reported vwap, and costRemoved on a PARTIAL reduce. On a close or reversal costRemoved == signedNotional exactly."
+  },
+  "identity": "netPnl(t) == grossRealizedPnl(t) + unrealizedPnl(t) - cumulativeFees(t), where netPnl(t) = cash(t) + signedPos(t)*mark(t) - openingEquity - cumulativeExternalCashFlow(t)",
+  "cases": [
+    {
+      "name": "open-long-single-fill",
+      "why": "Baseline: opening a position creates no PnL.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 100,
+            "price": "50.00"
+          },
+          "mark": "50.00",
+          "expect": {
+            "signedPos": 100,
+            "vwap": "50.00",
+            "cash": "-5000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "cash = -100*50.00 = -5000.00; vwap = 5000.00/100 = 50.00; unrealized = 100*(50.00-50.00) = 0; equity = -5000.00 + 100*50.00 = 0; netPnl = 0 - 0 - 0 = 0."
+        }
+      ]
+    },
+    {
+      "name": "add-to-long-vwap-average",
+      "why": "VWAP must be notional-weighted, not a mean of prices. 49.00 and 51.50 average to 50.25; the weighted answer is 50.00.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 60,
+            "price": "49.00"
+          },
+          "mark": "49.00",
+          "expect": {
+            "signedPos": 60,
+            "vwap": "49.00",
+            "cash": "-2940.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "notional = 60*49.00 = 2940.00; vwap = 2940.00/60 = 49.00."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 40,
+            "price": "51.50"
+          },
+          "mark": "50.00",
+          "expect": {
+            "signedPos": 100,
+            "vwap": "50.00",
+            "cash": "-5000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "notional = 2940.00 + 40*51.50 = 2940.00 + 2060.00 = 5000.00; vwap = 5000.00/100 = 50.00 (NOT (49.00+51.50)/2 = 50.25)."
+        }
+      ]
+    },
+    {
+      "name": "partial-reduce-then-full-close-long",
+      "why": "Reducing realizes PnL on the closed quantity only and must leave VWAP unchanged.",
+      "opening": {
+        "cash": "-5000.00",
+        "signedPos": 100,
+        "vwap": "50.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 30,
+            "price": "52.00"
+          },
+          "mark": "52.00",
+          "expect": {
+            "signedPos": 70,
+            "vwap": "50.00",
+            "cash": "-3440.00",
+            "grossRealizedPnl": "60.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "140.00",
+            "netPnl": "200.00"
+          },
+          "derivation": "realized = 30*(52.00-50.00) = 60.00; cash = -5000.00 + 30*52.00 = -3440.00; vwap unchanged at 50.00; unrealized = 70*(52.00-50.00) = 140.00; openingEquity = -5000.00 + 100*50.00 = 0; equity = -3440.00 + 70*52.00 = 200.00; netPnl = 200.00; 60.00 + 140.00 - 0 = 200.00."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 70,
+            "price": "52.00"
+          },
+          "mark": "52.00",
+          "expect": {
+            "signedPos": 0,
+            "vwap": null,
+            "cash": "200.00",
+            "grossRealizedPnl": "200.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "200.00"
+          },
+          "derivation": "realized += 70*(52.00-50.00) = 140.00 -> 200.00; cash = -3440.00 + 70*52.00 = 200.00; flat, so vwap is undefined (null, not 0) and unrealized = 0; netPnl = 200.00 = 200.00 + 0 - 0."
+        }
+      ]
+    },
+    {
+      "name": "open-short-then-close",
+      "why": "The short mirror: profit when the buy-back is below the sale VWAP.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 80,
+            "price": "30.00"
+          },
+          "mark": "30.00",
+          "expect": {
+            "signedPos": -80,
+            "vwap": "30.00",
+            "cash": "2400.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "selling short raises cash: +80*30.00 = 2400.00; equity = 2400.00 + (-80*30.00) = 0."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 80,
+            "price": "28.50"
+          },
+          "mark": "28.50",
+          "expect": {
+            "signedPos": 0,
+            "vwap": null,
+            "cash": "120.00",
+            "grossRealizedPnl": "120.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "120.00"
+          },
+          "derivation": "realized = 80*(30.00-28.50) = 120.00 (sale vwap minus buy-back price, for a short); cash = 2400.00 - 80*28.50 = 120.00."
+        }
+      ]
+    },
+    {
+      "name": "overshoot-long-to-short",
+      "why": "THE case most implementations get wrong: a sell larger than the long must close the long at its realized PnL and open a short for the remainder at the trade price - not realize PnL on the whole 150.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 100,
+            "price": "50.00"
+          },
+          "mark": "50.00",
+          "expect": {
+            "signedPos": 100,
+            "vwap": "50.00",
+            "cash": "-5000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "cash = -5000.00; vwap = 50.00."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 150,
+            "price": "55.00"
+          },
+          "mark": "55.00",
+          "expect": {
+            "signedPos": -50,
+            "vwap": "55.00",
+            "cash": "3250.00",
+            "grossRealizedPnl": "500.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "500.00"
+          },
+          "derivation": "Split: close 100 at 55.00 -> realized = 100*(55.00-50.00) = 500.00; open short 50 at 55.00 -> vwap = 55.00. Realizing on all 150 would wrongly give 750.00. cash = -5000.00 + 150*55.00 = 3250.00; equity = 3250.00 + (-50*55.00) = 500.00."
+        },
+        {
+          "event": {
+            "kind": "mark",
+            "price": "53.00"
+          },
+          "mark": "53.00",
+          "expect": {
+            "signedPos": -50,
+            "vwap": "55.00",
+            "cash": "3250.00",
+            "grossRealizedPnl": "500.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "100.00",
+            "netPnl": "600.00"
+          },
+          "derivation": "The new short profits as price falls: unrealized = -50*(53.00-55.00) = +100.00; equity = 3250.00 + (-50*53.00) = 600.00; 500.00 + 100.00 - 0 = 600.00."
+        }
+      ]
+    },
+    {
+      "name": "overshoot-short-to-long",
+      "why": "The reversal in the other direction, to catch a sign error that only shows one way.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 40,
+            "price": "20.00"
+          },
+          "mark": "20.00",
+          "expect": {
+            "signedPos": -40,
+            "vwap": "20.00",
+            "cash": "800.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "cash = +40*20.00 = 800.00."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 100,
+            "price": "18.00"
+          },
+          "mark": "18.00",
+          "expect": {
+            "signedPos": 60,
+            "vwap": "18.00",
+            "cash": "-1000.00",
+            "grossRealizedPnl": "80.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "80.00"
+          },
+          "derivation": "Split: close 40 short at 18.00 -> realized = 40*(20.00-18.00) = 80.00; open long 60 at 18.00. cash = 800.00 - 100*18.00 = -1000.00; equity = -1000.00 + 60*18.00 = 80.00."
+        }
+      ]
+    },
+    {
+      "name": "fees-only-no-price-move",
+      "why": "The counter-example that makes a direct pnl1 == pnl2 assertion invalid (D3). Gross trading PnL is exactly 0 while equity falls by the fees.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 100,
+            "price": "50.00",
+            "fee": "7.50"
+          },
+          "mark": "50.00",
+          "expect": {
+            "signedPos": 100,
+            "vwap": "50.00",
+            "cash": "-5007.50",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "7.50",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "-7.50"
+          },
+          "derivation": "cash = -5000.00 - 7.50 = -5007.50. The fee does NOT enter vwap (50.00, not 50.075) and does NOT reduce grossRealizedPnl. equity = -5007.50 + 5000.00 = -7.50; netPnl = -7.50 = 0 + 0 - 7.50."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 100,
+            "price": "50.00",
+            "fee": "7.50"
+          },
+          "mark": "50.00",
+          "expect": {
+            "signedPos": 0,
+            "vwap": null,
+            "cash": "-15.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "15.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "-15.00"
+          },
+          "derivation": "Round trip at an unchanged price: grossRealizedPnl = 100*(50.00-50.00) = 0.00, yet equity change = -15.00. A direct equality between a cumulative-PnL figure and a cash-balance figure is therefore FALSE here; only the four-term identity holds: -15.00 = 0.00 + 0.00 - 15.00."
+        }
+      ]
+    },
+    {
+      "name": "external-cash-flow-no-trades",
+      "why": "A deposit changes equity without producing any trading PnL. Without the cumulativeExternalCashFlow term the identity would report a 10000.00 profit.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "cashflow",
+            "amount": "10000.00"
+          },
+          "mark": "0.00",
+          "expect": {
+            "signedPos": 0,
+            "vwap": null,
+            "cash": "10000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "10000.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "equity = 10000.00; netPnl = 10000.00 - 0 - 10000.00 = 0.00 = 0 + 0 - 0."
+        }
+      ]
+    },
+    {
+      "name": "nonzero-opening-state",
+      "why": "Recovery starts mid-life. Opening equity must be excluded from netPnl, or every recovered book reports its history as today's profit.",
+      "opening": {
+        "cash": "-1900.00",
+        "signedPos": 50,
+        "vwap": "40.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 50,
+            "price": "42.00"
+          },
+          "mark": "42.00",
+          "expect": {
+            "signedPos": 0,
+            "vwap": null,
+            "cash": "200.00",
+            "grossRealizedPnl": "100.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "100.00"
+          },
+          "derivation": "openingEquity = -1900.00 + 50*40.00 = 100.00. realized = 50*(42.00-40.00) = 100.00; cash = -1900.00 + 50*42.00 = 200.00; equity = 200.00; netPnl = 200.00 - 100.00 - 0 = 100.00. Omitting openingEquity would report 200.00."
+        }
+      ]
+    },
+    {
+      "name": "duplicate-execution-ignored",
+      "why": "D4: a replayed or redelivered fill carrying an execution id already seen must not be applied twice. Asserts the dedup policy, not just that it is possible.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 10,
+            "price": "10.00",
+            "executionId": "E-1"
+          },
+          "mark": "10.00",
+          "expect": {
+            "signedPos": 10,
+            "vwap": "10.00",
+            "cash": "-100.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "First application: cash = -100.00, pos = 10."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 10,
+            "price": "10.00",
+            "executionId": "E-1",
+            "duplicate": true
+          },
+          "mark": "10.00",
+          "expect": {
+            "signedPos": 10,
+            "vwap": "10.00",
+            "cash": "-100.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "Same executionId: ignored. State is byte-identical to the previous step. Applying it would give pos = 20, cash = -200.00."
+        }
+      ]
+    },
+    {
+      "name": "unrealized-loss-on-long",
+      "why": "Unrealized PnL must be signed correctly for an adverse mark, with no trade involved.",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 25,
+            "price": "80.00"
+          },
+          "mark": "80.00",
+          "expect": {
+            "signedPos": 25,
+            "vwap": "80.00",
+            "cash": "-2000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "cash = -25*80.00 = -2000.00."
+        },
+        {
+          "event": {
+            "kind": "mark",
+            "price": "76.40"
+          },
+          "mark": "76.40",
+          "expect": {
+            "signedPos": 25,
+            "vwap": "80.00",
+            "cash": "-2000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "-90.00",
+            "netPnl": "-90.00"
+          },
+          "derivation": "unrealized = 25*(76.40-80.00) = 25*(-3.60) = -90.00; equity = -2000.00 + 25*76.40 = -2000.00 + 1910.00 = -90.00; a mark changes no cash and no realized PnL."
+        }
+      ]
+    },
+    {
+      "name": "recurring-vwap-partial-reduce",
+      "why": "The VWAP recurs (301/3), so this is the case an exact-or-throw division could not report at all. It also proves the rounding in costRemoved cancels against the rounding in the remaining notional, leaving the identity exact.",
+      "multiplier": "1",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 1,
+            "price": "100.00"
+          },
+          "mark": "100.00",
+          "expect": {
+            "signedPos": 1,
+            "vwap": "100.00",
+            "signedNotional": "100.00",
+            "cash": "-100.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "0.00",
+            "netPnl": "0.00"
+          },
+          "derivation": "notional = 1*100.00 = 100.00."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 2,
+            "price": "100.50"
+          },
+          "mark": "101.00",
+          "expect": {
+            "signedPos": 3,
+            "vwap": "100.333333333333",
+            "signedNotional": "301.00",
+            "cash": "-301.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "2.00",
+            "netPnl": "2.00"
+          },
+          "derivation": "notional = 100.00 + 2*100.50 = 301.00, exact. vwap = 301/3 = 100.333333333333, REPORTING ONLY. unrealized = (3*101.00 - 301.00)*1 = 2.00 exactly; deriving it from the rounded vwap would not be exact."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 1,
+            "price": "102.00"
+          },
+          "mark": "99.00",
+          "expect": {
+            "signedPos": 2,
+            "vwap": "100.333333333334",
+            "signedNotional": "200.666666666667",
+            "cash": "-199.00",
+            "grossRealizedPnl": "1.666666666667",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "-2.666666666667",
+            "netPnl": "-1.000000000000"
+          },
+          "derivation": "PARTIAL reduce, so costRemoved divides: 301.00*1/3 = 100.333333333333. realized = (-(-1*102.00) - 100.333333333333)*1 = 1.666666666667. remaining notional = 301.00 - 100.333333333333 = 200.666666666667. unrealized = (2*99.00 - 200.666666666667)*1 = -2.666666666667. netPnl = -199.00 + 198.00 = -1.000000000000, and 1.666666666667 + (-2.666666666667) = -1.000000000000: the roundings cancel."
+        }
+      ]
+    },
+    {
+      "name": "multiplied-contract-cl",
+      "why": "D1's multiplier, on the instrument in our own sample data. Guards the error where the multiplier scales the proceeds but not the removed cost, which turned a realized 60,000 into 1,558,500.",
+      "multiplier": "1000",
+      "opening": {
+        "cash": "0.00",
+        "signedPos": 0,
+        "vwap": "0.00"
+      },
+      "steps": [
+        {
+          "event": {
+            "kind": "trade",
+            "side": "BUY",
+            "qty": 100,
+            "price": "50.00"
+          },
+          "mark": "52.00",
+          "expect": {
+            "signedPos": 100,
+            "vwap": "50.00",
+            "signedNotional": "5000.00",
+            "cash": "-5000000.00",
+            "grossRealizedPnl": "0.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "200000.00",
+            "netPnl": "200000.00"
+          },
+          "derivation": "cash = -100*50.00*1000 = -5000000.00. The stored notional is UNmultiplied: 5000.00. unrealized = (100*52.00 - 5000.00)*1000 = 200000.00."
+        },
+        {
+          "event": {
+            "kind": "trade",
+            "side": "SELL",
+            "qty": 30,
+            "price": "52.00"
+          },
+          "mark": "52.00",
+          "expect": {
+            "signedPos": 70,
+            "vwap": "50.00",
+            "signedNotional": "3500.00",
+            "cash": "-3440000.00",
+            "grossRealizedPnl": "60000.00",
+            "cumulativeFees": "0.00",
+            "cumulativeExternalCashFlow": "0.00",
+            "unrealizedPnl": "140000.00",
+            "netPnl": "200000.00"
+          },
+          "derivation": "costRemoved = 5000.00*30/100 = 1500.00, exact. realized = (-(-30*52.00) - 1500.00)*1000 = (1560 - 1500)*1000 = 60000.00 - NOT (1560*1000 - 1500) = 1558500. remaining notional = 3500.00. unrealized = (70*52.00 - 3500.00)*1000 = 140000.00."
+        }
+      ]
+    }
+  ]
+}

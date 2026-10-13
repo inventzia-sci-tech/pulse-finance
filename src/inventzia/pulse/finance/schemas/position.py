@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Inventzia-Commercial
+# Copyright (c) 2013-2026 Magrino Bini, Paola Apruzzese, Inventzia Science and Technology Ltd.
+#
+# This file is part of pulse-data.
+#
+# pulse-data is dual-licensed:
+#   - Under the GNU Affero General Public License v3.0 or later (see LICENSE-AGPL-3.0).
+#   - Under a commercial license (see LICENSE-COMMERCIAL.txt).
+#     Contact operations@inventzia.com.
+#
+# THIS FILE IS GENERATED. DO NOT EDIT MANUALLY.
+# Source: schemas/position.yaml
+# Regenerate: python schemas/schemas-generators/generate_python.py
+
+from __future__ import annotations
+from decimal import Decimal
+from pydantic import BaseModel, ConfigDict, Field
+from typing import ClassVar, Optional
+
+
+class Position(BaseModel):
+    """
+    A position in one instrument at a point in time: signed size and the VWAP at which it was acquired. Ported from com.algotrading.cep.finance.data.position.Position (an A_MktDatum), published by the position manager whenever the position changes. The field set is the original's, with two deliberate departures recorded on the fields themselves: positionVwap becomes an exact decimal, and positionPoint becomes a string code. The original inherited its routing key and time from A_Datum as datumKey/datumTime, and also carried publishedTime and receivedTime. Those two are dropped here, matching the CdfBar precedent in pulse-data: the engine's run recording is where publish and receive provenance belongs, not every domain datum. CONVERSION CONTRACT with PositionTracker, the accounting kernel. The two representations differ deliberately and the mapping is total in both directions:    signedPosition  <-  tracker.signedPosition(), which is a BigDecimal but is                       constrained by the kernel to whole numbers precisely so that it                       cannot reach a state this int64 field cannot carry. A fractional                       position is rejected at the point of the trade, not discovered                       here at publication time. Relaxing either side requires relaxing                       both, as a wire version bump (D1).    positionVwap    <-  tracker.vwap().orElse(ZERO). The kernel reports an absent VWAP for                       a flat position because no average price exists; this datum                       publishes 0, as the original did. The information is not lost:                       signedPosition is carried alongside, so a consumer distinguishes                       "flat" from "acquired at zero" by reading it. A reader that cares                       must check signedPosition first.                        The reverse direction is therefore conditional: a datum with                       signedPosition 0 restores an absent VWAP, whatever positionVwap                       holds. Any other value of positionVwap on a flat Position is                       meaningless rather than wrong, and must be ignored.  Note that this datum is a published view, not a recovery record. Restoring a tracker needs its cumulative totals, reporting baseline and applied execution ids, none of which are here - see PositionSnapshot and PositionTracker.restore. Treating a Position as a checkpoint would silently reset PnL and re-admit already-applied fills.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    TYPE_ID:      ClassVar[str] = "com.inventzia.pulse.finance.schemas.Position"
+    TYPE_VERSION: ClassVar[int] = 1
+    DATUM_KEY_FIELD:  ClassVar[str] = "instrument_id"
+    DATUM_TIME_FIELD: ClassVar[str] = "position_time"
+
+    instrument_id: str = Field(alias="instrumentId")
+    """Instrument identifier. The old position manager keyed its trackers by the fill's datum key, falling back to the fill's instrument id when the key was not a known security for the strategy"""
+    position_time: int = Field(alias="positionTime")
+    """Time characterizing this position, in epoch milliseconds. The old A_Datum called this datumTime and distinguished it from publish and receive time"""
+    signed_position: int = Field(alias="signedPosition")
+    """Signed position size. Positive long, negative short, zero flat. An int64 exactly as the original, which forecloses fractional quantities; widening it would be a wire version bump, so it is a decision rather than an oversight"""
+    position_vwap: Decimal = Field(alias="positionVwap")
+    """Volume-weighted average price per unit at which the position was acquired. Zero when the position is flat, so a consumer must read signedPosition to tell "flat" from "acquired at zero".
+Exact decimal, not the original's double. The old Money type routed every read and clone through float, which lost 2.88 on a single clone of 123456789.12 - the measured defect that makes the old monetary model unportable as-is"""
+    position_point: str = Field(alias="positionPoint")
+    """Why this position point exists, as a string code. One of UNDEF, ID_TRD, REF_TRD, ID_MARK, CASHFLOW, EON, SOD, EOD, SON, CACT, REF - the constants of the original PositionPoint enum, unchanged.
+A string rather than an enum because pulse-data's manifest normaliser and generators have no enum support yet; it is validated at application level until they do. This is a generator limitation, not a modelling choice"""
+
+    # -- Datum protocol ---------------------------------------------------
+
+    @property
+    def datum_key(self) -> str:
+        return self.instrument_id
+
+    @property
+    def datum_time(self) -> int:
+        return self.position_time

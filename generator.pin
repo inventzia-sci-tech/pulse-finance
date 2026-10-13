@@ -1,0 +1,18 @@
+# The pulse-data generators that produced this repository's committed datum bindings.
+#
+# AUTHORITATIVE. Read by regen.sh and verified in CI (.github/workflows/ci.yml).
+# Deliberately not duplicated in core/java/pom.xml or pyproject.toml: a pin that exists in
+# two places is a pin that eventually lies.
+#
+# Why digests as well as a revision: a revision pin says nothing about an uncommitted edit
+# in a sibling checkout, and a dirty generator tree is exactly how silent drift gets in.
+# Why pinned at all: SPI compatibility (SPI_VERSION) and generator reproducibility are
+# different guarantees - two generator revisions can both be SPI-1 compatible and still
+# emit different code.
+#
+# To change: review the generator diff, run ./regen.sh, commit the regenerated output and
+# the updated digests in the same commit.
+pulse_data_revision = 5486aecb2c93dfcb630b74f9ee430b3b258ecad0
+sha256_16.generate_java.py   = 5b149178238747a4
+sha256_16.generate_python.py = c4b7360ca20c13c5
+sha256_16.manifest.py        = b0fd483e70b192aa
