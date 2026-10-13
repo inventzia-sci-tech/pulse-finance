@@ -107,6 +107,30 @@ entry point, Java by `ServiceLoader`. Adding a schema is a deliberate, confirmed
 | [`docs/spec-position-state.md`](docs/spec-position-state.md) | the `PositionState` port, field by field |
 | [`tests/fixtures/README.md`](tests/fixtures/README.md) | the reconciliation identity the fixtures enforce |
 
-## Licence
+## Licensing
 
-Dual-licensed: AGPL-3.0-or-later, or a commercial licence. Contact operations@inventzia.com.
+This project is dual-licensed:
+
+- **Open Source (AGPL v3.0 or later)**: free to use, modify, and distribute under the terms of the
+  GNU Affero General Public License v3.0. See [`LICENSE-AGPL-3.0`](LICENSE-AGPL-3.0).
+- **Commercial License**: use in proprietary or closed-source projects without AGPL obligations.
+  See [`COMMERCIAL.md`](COMMERCIAL.md) for the informational summary and
+  [`LICENSE-COMMERCIAL.txt`](LICENSE-COMMERCIAL.txt) for the binding terms.
+
+Contact: operations@inventzia.com for commercial licensing.
+
+## Contributing
+
+Contributions are welcome. By submitting a contribution you agree to the terms in
+[`CLA.md`](CLA.md), including the Developer Certificate of Origin sign-off and the
+dual-licensing grant. CI enforces DCO sign-off on every PR commit.
+
+## Security
+
+Please report security vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
+Do not open public issues for security problems.
+
+## Trademarks
+
+"Pulse" and "Inventzia" are trademarks of Inventzia Science and Technology Ltd. The licenses for
+this software do not grant any rights to use these trademarks.
