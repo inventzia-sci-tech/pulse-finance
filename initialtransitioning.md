@@ -221,7 +221,7 @@ into core.
 
 ### Proposed design for the installation criterion
 
-**Status: proposed, not implemented. One part needs a change in pulse-beacon, so it is not
+**Status: proposed, not implemented. One of the changes lands in pulse-beacon, so it is not
 pulse-finance's decision alone.**
 
 #### What already exists
@@ -230,50 +230,147 @@ pulse-finance's decision alone.**
 `jars_dir`; else a **shaded runtime jar bundled in the installed wheel**
 (`inventzia.pulse.beacon._runtime/pulse-beacon-runtime.jar`, located via `importlib.resources`,
 staged by `build-runtime-jar.sh`); else staged jars in a source checkout. Beacon has therefore
-already solved this for itself. What it has no path for is **anyone else's** jar, which is exactly
-why `pulse-ext-example` falls back to `extra_classpath` and why the criterion is still open.
+already solved this for itself. What it has no path for is **anyone else's** jar, which is why
+`pulse-ext-example` falls back to `extra_classpath` and why the criterion is still open.
 
-#### Recommendation: a classpath-contribution entry point in pulse-beacon
+#### The entry-point contract
 
-A domain package ships its jar as wheel package data and declares an entry point;
-`resolve_classpath()` consults that group and appends what it finds. Application code then calls
-`start_jvm()` with no arguments and passes no paths.
+| | |
+|---|---|
+| **Group** | `inventzia.pulse.jvm_classpath` |
+| **Each entry point references** | a **callable**, not a module attribute, returning a sequence of JAR paths |
+| **The callable must not** | start a JVM, import JPype, or touch the datum registry. It runs *before* Java exists, so it may only locate resources (`importlib.resources`, package data) |
+| **The callable may** | return an empty sequence, which is not an error: a data-only install legitimately contributes no jar |
 
-**Why not the simpler option**, which is for finance to provide its own bootstrap calling
-`start_jvm(extra_classpath=[its own jar])`: it does not compose. A JVM's classpath is fixed once
-started, and `start_jvm` already documents the failure in its own error text, which says that a
-caller adding jars to a running JVM must instead have passed the full classpath, including every
-extension jar, before any other JPype use. With one bootstrap per package, finance and a broker
-adapter become mutually exclusive: whichever starts the JVM first wins and the other package's types
-cannot be loaded. Broker adapters are named in the ownership model above, so this is not
-hypothetical.
+A callable rather than a static path lets a package locate its own resources through
+`importlib.resources`, which is the only portable way to do it from inside a wheel, including a
+zipped one.
 
-There is also a symmetry argument. Type discovery is **already** an entry point
-(`inventzia.pulse.datum_types`). Without the matching mechanism for jars, the Python side can
-discover a provider whose Java classes the JVM cannot load, and the cross-language type-universe
-gate reports that as a mismatch without explaining the cause.
+**Beacon's obligations**, all discharged **before** the JVM starts:
 
-#### Finance's jar must be thin, not shaded
+1. **Deterministic order.** Contributions are collected in a defined order, sorted by entry-point
+   name, so a classpath is reproducible across machines and installs. Entry-point iteration order is
+   otherwise unspecified, and an unstable classpath makes version-shadowing bugs irreproducible.
+2. **Normalise and deduplicate.** Absolute, OS-normalised paths, the way `_normalize_classpath_entry`
+   already does, so the same jar contributed twice appears once.
+3. **Validate and attribute.** A contributor that raises, or that returns a path which does not
+   exist, fails startup with a message **naming the distribution responsible**. A missing jar
+   discovered as a `NoClassDefFoundError` deep in a run is the outcome this exists to prevent.
+4. **Report the composition.** The source description that `resolve_classpath` already returns names
+   the contributing packages, so a wrong classpath is diagnosable from the log alone.
 
-Measured against beacon's bundled jar: 2,213 entries, embedding pulse-data (22 entries, including
-`DatumTypeRegistry`, `DatumTypeProvider` and `CoreDatumTypeProvider`), Jackson (1,185) and jspecify.
-If finance shaded those in as well, two copies of `DatumTypeProvider` would sit on the classpath and
-`FinanceDatumTypeProvider` compiled against one would be rejected by the registry loaded from the
-other, as `ServiceConfigurationError: not a subtype`. A thin jar is also sufficient, because beacon's
-fat jar already supplies Jackson and pulse-data.
+**Interaction with the existing inputs.** Contributions are included in **every** startup mode, so
+behaviour does not change depending on which argument a caller happened to pass. Resolution order
+becomes: beacon's own jars (explicit `jars_dir`, else bundled, else staged), then discovered
+contributions, then `extra_classpath`. The explicit argument stays last so a developer can still
+override, and `jars_dir` continues to replace only *beacon's* jars rather than suppressing
+contributions.
+
+#### The already-running JVM path needs the same treatment
+
+Adding discovery to `resolve_classpath()` alone is **not sufficient**, and this is the part most
+likely to be missed. `start_jvm()` takes a separate branch when a JVM is already running, and its
+classpath check is guarded:
+
+```python
+if jpype.isJVMStarted():
+    if jars_dir is not None or extra_classpath:      # <- only then is anything checked
+        ...
+```
+
+So a **no-argument** `start_jvm()` against a running JVM resolves no classpath and checks nothing.
+Since the recommendation above makes the no-argument call the normal one, that hole becomes the
+common case rather than an edge case. It matters for notebooks, for retries after a failed
+verification, and for host applications that booted the JVM before calling beacon.
+
+**Required behaviour on reuse:** resolve the discovered contributions, compare them against the
+running classpath, and if any are absent raise with a clear instruction to restart the JVM with the
+full classpath. Cross-language verification (`verify_type_universe()`) must continue to run on
+reuse, as it does today.
+
+#### Why a thin jar, stated correctly
+
+An earlier draft of this section claimed that duplicate classes in two jars would produce two
+incompatible `DatumTypeProvider` types and a `ServiceConfigurationError: not a subtype`. **That was
+wrong.** Java type identity is the pair of the class and its *defining class loader*, so two copies
+of a class on one ordinary flat classpath do not yield two types: the first copy found wins and the
+second is simply never loaded.
+
+The real reasons for a thin jar are sufficient on their own:
+
+- **Version shadowing.** Beacon's bundled jar already embeds pulse-data, Jackson and jspecify
+  (measured: 2,213 entries, of which pulse-data 22, Jackson 1,185, jspecify 6). A second copy at a
+  different version would be shadowed silently by whichever appears first, which is a bug that
+  reproduces only on some orderings.
+- **Duplicate dependencies.** Shading the same libraries twice inflates the artifact and the
+  install for no benefit, since beacon's jar is always on the classpath ahead of the contributions.
+- **Unpredictable linkage.** Which copy satisfies a given reference depends on classpath order, and
+  that is not a property a release should depend on.
+
+A thin finance jar is also *sufficient*, precisely because beacon's fat jar supplies pulse-data and
+Jackson already.
 
 Related detail worth recording: beacon's jar carries **no**
 `META-INF/services/com.inventzia.pulse.data.datum.DatumTypeProvider` entry, consistent with core
 being seeded directly rather than discovered. Finance's services entry therefore remains the only
 one, and the namespace check still applies to it.
 
+#### Why not a bootstrap per package
+
+The alternative is for finance to provide its own bootstrap calling
+`start_jvm(extra_classpath=[its own jar])`. It does not compose. **Under beacon's supported startup
+contract** the classpath is fixed at `startJVM` and not extended afterwards, which `start_jvm`
+enforces by raising rather than silently dropping late additions. (This is beacon's contract, not a
+universal claim about the JVM: a program can always load classes later through its own class loader.
+Beacon does not, and application code should not have to.)
+
+So with one bootstrap per package, finance and a broker adapter become mutually exclusive: whichever
+starts the JVM first wins, and the other package's types cannot be loaded. Broker adapters are named
+in the ownership model above, so this is not hypothetical.
+
+There is also a symmetry argument. Type discovery is **already** an entry point
+(`inventzia.pulse.datum_types`). Without the matching mechanism for jars, the Python side can
+discover a provider whose Java classes the JVM cannot load, and the cross-language type-universe
+gate reports that as a mismatch without explaining the cause.
+
+#### Artifact construction and dependency versions
+
+- **The wheel must contain the freshly built jar**, together with its
+  `META-INF/services` resource, and not a stale staged artifact. Beacon already guards this: its
+  build backend fails a release wheel when the runtime jar is missing. Finance needs the equivalent,
+  and the jar's build must be part of producing the wheel rather than a step someone remembers.
+- **Maven belongs to the build environment only.** The jar is built with Maven where the wheel is
+  produced; installation and execution are then tested in an environment with **no Maven at all**.
+- **Finance declares compatibility with the beacon release that provides discovery.** Until that
+  release exists, finance cannot depend on it, which is why change 1 below gates the rest.
+- **Keep data-only use lightweight.** If using finance's types from Python without running a JVM
+  should stay dependency-light, the beacon dependency belongs in an optional extra (an execution
+  extra) rather than the base requirements.
+- **Thin means finance classes and resources only.** Any future Java dependency of finance that
+  beacon's jar does not already supply needs its own declared packaging treatment, decided then, not
+  absorbed silently into the jar.
+
 #### The three changes
 
 | # | Repository | Change |
 |---|---|---|
-| 1 | **pulse-beacon** | New entry-point group. `resolve_classpath()` appends contributed jars after its own, and names them in the returned source description so a failure is diagnosable. Small, additive, backward compatible. |
-| 2 | **pulse-finance** | `mvn package` output staged into `inventzia/pulse/finance/_runtime/`, declared as `package-data`, plus the entry point. Mirrors beacon's `_runtime` pattern without the shading. |
-| 3 | **pulse-finance** | Fill in the release-gated placeholders in `tests/test_installation.py`: build wheel and jar, install into a venv **outside** the checkout with no Maven available, run a Python to Java to Python finance-event round trip asserting exact decimal equality, and assert the application code contains no `extra_classpath` and no path into a `target/` directory. |
+| 1 | **pulse-beacon** | The entry-point contract above: discovery in `resolve_classpath()`, deterministic order, normalisation and deduplication, attributed validation before the JVM starts, **and the equivalent check on the already-running path**. Additive and backward compatible, but it needs a release. |
+| 2 | **pulse-finance** | Freshly built jar staged into `inventzia/pulse/finance/_runtime/`, declared as `package-data`, with a build-time guard against a missing or stale jar, plus the entry point. Mirrors beacon's `_runtime` pattern without the shading. |
+| 3 | **pulse-finance** | The acceptance tests below, replacing the release-gated placeholders in `tests/test_installation.py`. |
+
+#### Acceptance tests
+
+The round trip alone does not test the thing the design exists for, which is **composition**. Each
+JVM scenario runs in its **own process**, because a JVM cannot be started twice in one interpreter
+and reusing one would make the scenarios interfere.
+
+| Scenario | Asserts |
+|---|---|
+| **Finance alone** | wheel and jar installed into a venv **outside** the checkout, no Maven present; a Python to Java to Python finance-event round trip preserving exact decimal values; application code contains no `extra_classpath` and no path into a `target/` directory |
+| **Finance plus a second extension** | both installed, plain `start_jvm()` with no arguments, **both** providers present in the registry and both type sets usable. This is the justification for the whole design, so it is a test and not a remark |
+| **Repeated startup** | `start_jvm()` twice in one process is idempotent and still verifies the type universe on reuse |
+| **Already-running JVM missing a contribution** | a JVM started without a contributed jar fails with an attributed, actionable restart instruction rather than a `NoClassDefFoundError` later |
+| **Missing packaged jar** | a package whose jar is absent fails at startup, naming the distribution |
 
 #### Consequences
 
@@ -282,8 +379,7 @@ so it is wider in scope than the rest of this work. It is the "improve extension
 case: every future domain package gets the same behaviour for free.
 
 The fallback, if the blast radius must stay inside pulse-finance, is the bootstrap-per-package
-option. It would pass the installed-wheel test today and hit the composition wall as soon as a second
-domain package exists. The entry point is the better outcome.
+option. It would pass the Finance-alone test today and fail the composition test by construction.
 
 ### Generator defects found for out-of-repo ownership
 
