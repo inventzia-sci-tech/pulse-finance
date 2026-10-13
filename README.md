@@ -12,24 +12,24 @@ simulation (algo/quant trading) for Pulse.
 
 This is the financial domain layer. The event-driven substrate lives in pulse-beacon and the datum
 machinery in pulse-data; what is built here is the *financial* content being transitioned from the
-legacy `JavaCepFinance` system — see [`initialtransitioning.md`](initialtransitioning.md).
+legacy `JavaCepFinance` system; see [`initialtransitioning.md`](initialtransitioning.md).
 
 ## Package map
 
-### `com.inventzia.pulse.finance.position` — position accounting
+### `com.inventzia.pulse.finance.position`: position accounting
 
 The accounting kernel. **Pure**: no engine, no persistence, no clock, and no dependency on
-pulse-beacon — so the arithmetic can be proven against fixtures rather than inside a running engine.
+pulse-beacon, so the arithmetic can be proven against fixtures rather than inside a running engine.
 All `BigDecimal`; no binary floating point anywhere in a monetary path.
 
 | Type | |
 |---|---|
-| `PositionTracker` | position, VWAP, realised and unrealised PnL for one instrument. Trades apply atomically — either every field moves or none does |
+| `PositionTracker` | position, VWAP, realised and unrealised PnL for one instrument. Trades apply atomically: either every field moves or none does |
 | `TradeOutcome` | the trade case decomposition made explicit: `OPEN`, `ADD`, `REDUCE`, `CLOSE`, `REVERSE`, `IGNORED_DUPLICATE` |
 | `PositionSnapshot` | complete state for persistence and exact restoration, including applied execution ids |
 | `Side` | `BUY` / `SELL` |
 
-### `com.inventzia.pulse.finance.schemas` — generated datum types
+### `com.inventzia.pulse.finance.schemas`: generated datum types
 
 **Generated, never hand-written** (`./regen.sh`). pulse-finance owns its finance schemas; pulse-data
 owns the generators. Every `TYPE_ID` is under `com.inventzia.pulse.finance.`, enforced by
@@ -58,9 +58,9 @@ portfolio layer.
 schemas/                 finance YAML, owned here (see schemas/README.md)
 regen.sh                 regenerates bindings + provider using pulse-data's generators
 generator.pin            the one authoritative generator pin: revision + digests
-core/java/               pulse-finance-core — the Java module (Java 17)
+core/java/               pulse-finance-core, the Java module (Java 17)
   src/main/java/...      position/ (kernel) and schemas/ (generated)
-  src/main/resources/    META-INF/services — Java-side SPI discovery
+  src/main/resources/    META-INF/services, Java-side SPI discovery
 src/inventzia/...        generated Python bindings + provider
 tests/
   fixtures/              shared cross-language accounting fixtures
@@ -94,7 +94,7 @@ this by checking both out as siblings).
 ```
 
 Finance owns the *meaning* of its types; pulse-data owns the *machinery* that generates them. A
-consuming application installs the package and the types are discovered automatically — Python by
+consuming application installs the package and the types are discovered automatically: Python by
 entry point, Java by `ServiceLoader`. Adding a schema is a deliberate, confirmed step: see
 [`schemas/README.md`](schemas/README.md).
 

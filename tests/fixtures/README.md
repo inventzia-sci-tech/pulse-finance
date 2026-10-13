@@ -8,7 +8,7 @@ port the defects along with the behaviour.
 
 They are **policy-explicit**, not policy-free. Each file states the assumptions it makes
 under `assumptions`. Where a decision D1–D5 is still open, the fixture fixes the narrowest
-defensible choice and says so — so the fixtures *constrain* those decisions rather than
+defensible choice and says so, so the fixtures *constrain* those decisions rather than
 presuming them settled. When a decision lands differently, the affected fixture changes
 deliberately, in one place, with its derivation.
 

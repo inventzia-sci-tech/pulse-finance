@@ -7,11 +7,11 @@ said explicitly.
 
 These five were extracted in `../initialtransitioning.md` because each reaches into both the
 generated schemas and the arithmetic kernel, and retrofitting any of them means a wire version bump.
-A universal accounting model is not the goal — a *written* one is.
+A universal accounting model is not the goal; a *written* one is.
 
 ---
 
-## D1 — Instrument and quantity model
+## D1. Instrument and quantity model
 
 **Recommendation: an `InstrumentSpec` looked up beside the events, never carried on them.**
 
@@ -41,7 +41,7 @@ published faithfully, and the kernel must not be able to reach a state its own w
 express. Relaxing it means relaxing both together, as a version bump.
 
 **Consequences accepted.** No crypto, no fractional FX, no fractional-share brokers in v1. A reverse
-split producing an odd-lot remainder has no representation yet — the old code silently truncated it
+split producing an odd-lot remainder has no representation yet; the old code silently truncated it
 with a `(long)` cast under its own `// TODO`; refusing is better than truncating, and the corporate
 action spec will have to decide between cash-in-lieu and a fractional carve-out.
 
@@ -51,7 +51,7 @@ the multiplier and that nothing else changes.
 
 ---
 
-## D2 — Numerical policy
+## D2. Numerical policy
 
 This is the decision the kernel is currently *refusing* rather than answering, and that refusal is a
 placeholder.
@@ -67,14 +67,14 @@ placeholder.
 
 **Why 12.** It is already the persisted scale, so choosing anything else guarantees a mismatch
 between what is calculated and what survives a round trip. Twelve digits is far finer than any
-instrument's tick and coarse enough that `DECIMAL(38,12)` leaves 26 integer digits — more than any
+instrument's tick and coarse enough that `DECIMAL(38,12)` leaves 26 integer digits, more than any
 realistic notional.
 
 **The important structural point: a rounded VWAP must not contaminate PnL.** Realized PnL is
 currently computed as `closedQty × (price − vwapBefore) × multiplier`, which reads a *divided* value
 back into an accumulating total. With an inexact VWAP that rounding enters PnL permanently and
-compounds across reduces. The fix is to keep the signed notional as the single source of truth —
-which the kernel already does — and compute the cost removed on a reduce from the notional directly:
+compounds across reduces. The fix is to keep the signed notional as the single source of truth (which the kernel
+already does) and compute the cost removed on a reduce from the notional directly:
 
 ```
 exposure        = |positionBefore|
@@ -86,7 +86,7 @@ realized        = ( −signedClosedQty × price − costRemoved ) × multiplier
 
 **The multiplier scales the whole bracket.** The signed notional is stored *unmultiplied*, so
 multiplying only the proceeds adds two different units together. With CL's multiplier of 1000 that
-error turns a realized **60,000 into 1,558,500** — it is not a rounding difference, it is nonsense.
+error turns a realized **60,000 into 1,558,500**: it is not a rounding difference, it is nonsense.
 Two earlier drafts of this spec were wrong here: the first had the sign inverted (−120 instead of
 +120 on a short close), the second multiplied only the proceeds. The form above is verified against
 the VWAP form on long reduce, long close, short reduce, short close, reversal and a negative price,
@@ -96,7 +96,7 @@ The double negation is not decoration: `notionalBefore` and `costRemoved` are *s
 a short), and the closing trade's cash flow has the opposite sign to the position it closes.
 
 For a close or a reversal `closedQty == exposure`, so `costRemoved == notionalBefore` **exactly** and
-no division happens at all — which is most of the cases that matter. Only a partial reduce divides.
+no division happens at all, which is most of the cases that matter. Only a partial reduce divides.
 
 **The remaining notional is updated by subtracting the allocated cost**, not by re-deriving it from
 a VWAP:
@@ -119,7 +119,7 @@ could not report its own VWAP. It now exposes `CALCULATION_SCALE = 12` /
 from the notional. The two tests that asserted the old exact-or-throw behaviour were retargeted
 rather than deleted.
 
-**What pins it — now in place.** `recurring-vwap-partial-reduce` and `multiplied-contract-cl` are
+**What pins it (now in place).** `recurring-vwap-partial-reduce` and `multiplied-contract-cl` are
 fixtures, consumed by both test suites: 13 cases / 25 checkpoints, with `signedNotional` asserted
 wherever a case exercises rounding, and the reconciliation residual asserted exactly zero at every
 checkpoint. Unit tests cover the reported VWAP's rounded value, the multiplier scaling realized and
@@ -130,7 +130,7 @@ path), and a long reduce sequence asserting the residual does not drift over man
 
 ---
 
-## D3 — Reconciliation equations
+## D3. Reconciliation equations
 
 **Recommendation: the four-term identity, already implemented and already enforced.** This decision
 is effectively settled by the fixtures; it is recorded here so it is not re-litigated.
@@ -147,7 +147,7 @@ where unrealizedPnl(t) = ( signedPosition(t) × mark(t) − signedNotional(t) ) 
 ```
 
 **Unrealized PnL is computed from the signed notional, never from the VWAP.** The two forms are
-algebraically identical only when the VWAP divides exactly — precisely the case that cannot be
+algebraically identical only when the VWAP divides exactly, precisely the case that cannot be
 assumed. An earlier draft of this spec wrote the VWAP form, which reads a rounded value back into an
 accounting figure; on `recurring-vwap-partial-reduce` that is not exact and the identity drifts.
 
@@ -174,18 +174,18 @@ gross trading PnL at exactly **0** while equity falls by **15**. Only the four-t
 kernel, not a data problem, and callers should treat it as fatal.
 
 **What pins it.** `reconciliationDiscrepancy()` is asserted zero at **every** checkpoint of every
-fixture — 20 of them — not only at the end. Plus the Python identity check, which validates the
+fixture (20 of them), not only at the end. Plus the Python identity check, which validates the
 fixtures themselves independently of any implementation.
 
 ---
 
-## D4 — Checkpoint contents, replay boundary and duplicate handling
+## D4. Checkpoint contents, replay boundary and duplicate handling
 
 **Recommendation.**
 
 **Accounting identity: the triple `(strategyId, portfolioId, instrumentId)`.** One tracker per
 triple. The old system keyed its datums by instrument alone and carried strategy and portfolio as
-payload — defensible only because a `MonoStrategyPositionManager` is one strategy by construction and
+payload: defensible only because a `MonoStrategyPositionManager` is one strategy by construction and
 the topic name encoded it (`POS-STATE-PUB_<strategyId>`). Making the triple explicit removes that
 implicit dependence on topic naming.
 
@@ -198,7 +198,7 @@ while the trade correctly deduplicates.
 millisecond, so a timestamp cannot say which of them was included. The checkpoint records the last
 applied `(eventTime, sequence)` per subscribed topic; replay resumes strictly after it.
 
-**Checkpoint contents** — `PositionSnapshot` already carries the accounting half:
+**Checkpoint contents**: `PositionSnapshot` already carries the accounting half:
 
 | Carried | Why |
 |---|---|
@@ -210,7 +210,7 @@ applied `(eventTime, sequence)` per subscribed topic; replay resumes strictly af
 
 **Still to add**: the per-topic `(eventTime, sequence)` boundary, and the triple identity.
 
-### D4 is not yet a complete protocol — six things still unspecified
+### D4 is not yet a complete protocol: six things still unspecified
 
 The above fixes the identity and the snapshot's accounting half. These remain open, and each can
 silently break recovery:
@@ -220,7 +220,7 @@ silently break recovery:
 established. A per-topic counter restarts at zero; a per-engine counter is not reproducible across a
 replay unless it is recorded. The boundary must be defined as a per-topic `(eventTime, sequence)`
 **vector**, with a stated rule for the order in which same-timestamp events from *different* topics
-are applied — otherwise two replays of the same input can produce different states.
+are applied: otherwise two replays of the same input can produce different states.
 
 **2. Atomic capture of accounting state and boundary together.** The snapshot and the boundary are
 read at different instants unless something makes them one write. A snapshot taken after event *n*
@@ -235,14 +235,14 @@ snapshot a second set.
 **4. Collections cannot be persisted by the scalar SQL mapper.** `StorageMapping` refuses arrays
 outright, so neither id set can be a column. Options: a child table keyed by the accounting triple;
 a single canonical delimited string (bounded, and a length to declare); or a separate blob store.
-This must be decided before a `PositionCheckpoint` schema can be written at all — it is not a detail.
+This must be decided before a `PositionCheckpoint` schema can be written at all; it is not a detail.
 
 **5. Instrument metadata and its version.** Reproducing a historical interpretation needs the
 `InstrumentSpec` that was in force, not today's. A multiplier corrected after the fact silently
 re-prices history. The checkpoint must carry the instrument spec version it was computed under.
 
 **6. Pruning needs a stronger guarantee than the boundary gives.** A boundary stops *replay* from
-re-delivering an old execution; it does nothing about a **live adapter** re-delivering one — a broker
+re-delivering an old execution; it does nothing about a **live adapter** re-delivering one, a broker
 resending a fill from last week, after the id was pruned. So retention cannot be derived from the
 replay horizon alone. It needs either a broker-side guarantee of maximum redelivery age, or
 durable dedup outside the pruning window (an execution-id ledger with its own retention), or an
@@ -252,18 +252,18 @@ explicit accepted risk. Naming a horizon without one of those is a guess dressed
 the obvious fix (prune by horizon) is exactly what item 6 says is unsafe on its own.
 
 **What pins it.** A recovery-equivalence test: process a sequence, checkpoint mid-way, restore, replay
-the remainder, and assert the final state is **identical** to uninterrupted processing — including
+the remainder, and assert the final state is **identical** to uninterrupted processing, including
 cumulative totals and the reconciliation residual. Plus a redelivery test across the restore
 boundary, and a same-millisecond multi-fill test.
 
 ---
 
-## D5 — Strategy contract
+## D5. Strategy contract
 
 **Recommendation: strategies react to published position-update events. Synchronous reads are a
 same-process convenience that carries no ordering guarantee.**
 
-**Why.** Actor priority (`MultiClientEngine.registerActor(…, highPriority)`) orders *invocation* — it
+**Why.** Actor priority (`MultiClientEngine.registerActor(…, highPriority)`) orders *invocation*; it
 guarantees the position manager is updated before another fill subscriber runs. It does **not**
 guarantee that a *derived* position event has been delivered to that subscriber before it runs. Those
 are different properties, and a strategy written against the first while believing the second is
@@ -274,12 +274,12 @@ actor (the Python side holds no reference to the Java manager) and any future ou
 
 **Cost accepted.** A strategy reacting to a published update sees the position one dispatch later
 than a synchronous reader would. For a strategy that must act within the same event as its own fill,
-that is a real difference and the synchronous accessor is the escape hatch — documented as
+that is a real difference and the synchronous accessor is the escape hatch: documented as
 participating in no ordering guarantee, and never the mechanism a correctness argument rests on.
 
 **What pins it.** A test with two actors subscribed to the same fill topic, the manager registered
 high-priority, asserting (a) the manager's state is updated before the second actor runs, and (b) the
-derived position event reaches it only on a later dispatch — so the distinction is demonstrated
+derived position event reaches it only on a later dispatch, so the distinction is demonstrated
 rather than assumed. Plus the same test with several events at one timestamp.
 
 ---
@@ -289,9 +289,9 @@ rather than assumed. Plus the same test with several events at one timestamp.
 | # | Recommendation | Kernel change needed |
 |---|---|---|
 | D1 | `InstrumentSpec` beside the events; whole-unit quantities in v1 | none (multiplier is already a constructor argument) |
-| D2 | exact addition; division at scale 12 `HALF_EVEN`; persisted 12; presentation per-currency | **yes** — replace exact-or-throw, move realized PnL onto the notional |
+| D2 | exact addition; division at scale 12 `HALF_EVEN`; persisted 12; presentation per-currency | **yes**: replace exact-or-throw, move realized PnL onto the notional |
 | D3 | the four-term identity | none (implemented and enforced) |
-| D4 | triple identity; execution + fee ids; `(eventTime, sequence)` boundary | **yes** — and six items remain unspecified; not yet a protocol |
+| D4 | triple identity; execution + fee ids; `(eventTime, sequence)` boundary | **yes**, and six items remain unspecified; not yet a protocol |
 | D5 | event-driven; synchronous read is an unguaranteed convenience | none yet (actor wrapper does not exist) |
 
 D2 and D4 are the two that block `PositionState`, because they decide its scales and whether it is a

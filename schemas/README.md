@@ -26,7 +26,7 @@ cash-flow events the kernel already accounts for. Each is confirmed field-by-fie
 original author before it is written.
 
 Decisions **D1–D5** in `../initialtransitioning.md` still gate anything whose field types they
-touch — in particular the instrument/multiplier model (D1) and persisted scale (D2).
+touch, in particular the instrument/multiplier model (D1) and persisted scale (D2).
 
 ## Checklist for each new schema
 
@@ -36,5 +36,5 @@ touch — in particular the instrument/multiplier model (D1) and persisted scale
 - [x] `TYPE_ID` under the provider namespace, so `DatumTypeRegistry` accepts it.
 - [x] Entry point in `../pyproject.toml` and the Java `META-INF/services` entry present.
 - [x] `./regen.sh --check` green.
-- [ ] Clean-environment installation round trip passing (`../tests/test_installation.py`) —
+- [ ] Clean-environment installation round trip passing (`../tests/test_installation.py`):
       still open; see the release gate.
