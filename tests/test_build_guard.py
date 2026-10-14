@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -34,11 +35,29 @@ def backend():
     return importlib.reload(_build_backend)
 
 
+@pytest.fixture(scope="session")
+def staged_artifacts():
+    """Make sure something is staged, staging it if needed.
+
+    Self-sufficient on purpose. Skipping when nothing is staged left these tests reporting nine
+    skips and exit code zero in the release job, which proves nothing; and leaving the staging to
+    the job meant the guards and the thing they guard could drift apart.
+    """
+    from conftest import unavailable
+
+    if _JAR.is_file() and _DIGEST.is_file():
+        return
+    if shutil.which("mvn") is None or shutil.which("java") is None:
+        unavailable("mvn and a JDK are required to stage the jar these guards check")
+    out = subprocess.run(["bash", str(_REPO / "stage-runtime-jar.sh")],
+                         capture_output=True, text=True, timeout=900, cwd=str(_REPO))
+    if out.returncode != 0 or not _JAR.is_file():
+        unavailable(f"could not stage the jar: {out.stderr[-300:]}")
+
+
 @pytest.fixture
-def staged(tmp_path):
+def staged(tmp_path, staged_artifacts):
     """Preserve and restore the staged artifacts around each test."""
-    if not _JAR.is_file() or not _DIGEST.is_file():
-        pytest.skip("nothing staged; run ./stage-runtime-jar.sh first")
     jar_backup = tmp_path / "jar"; shutil.copy(_JAR, jar_backup)
     digest_backup = tmp_path / "digest"; shutil.copy(_DIGEST, digest_backup)
     yield

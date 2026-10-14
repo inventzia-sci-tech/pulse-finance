@@ -26,10 +26,19 @@ _ACME = _REPO / "tests" / "fixtures" / "acme-telemetry"
 _RELEASE_MODE = os.environ.get("PULSE_FINANCE_RELEASE") == "1"
 
 
-def _unavailable(reason: str):
+def unavailable(reason: str):
+    """Skip during development, FAIL under ``PULSE_FINANCE_RELEASE=1``.
+
+    Public because the build-guard tests need the same rule. A prerequisite that silently skips
+    in release mode makes the whole check decorative: the guards once reported nine skips and
+    exit code zero in a release job, which is indistinguishable from nine passes.
+    """
     if _RELEASE_MODE:
-        pytest.fail(f"installation acceptance prerequisite missing: {reason}", pytrace=False)
+        pytest.fail(f"acceptance prerequisite missing: {reason}", pytrace=False)
     pytest.skip(f"{reason} (set PULSE_FINANCE_RELEASE=1 to make this a failure)")
+
+
+_unavailable = unavailable           # internal alias, kept for the fixtures below
 
 
 def _run(cmd, **kw):

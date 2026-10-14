@@ -202,6 +202,24 @@ print("EVENT ROUND TRIP EXACT", decoded.position_vwap)
     assert "EVENT ROUND TRIP EXACT 68.48" in out.stdout
 
 
+def test_a_finance_datum_is_delivered_through_the_java_engine(finance_only_install):
+    """Engine delivery, not just serialisation.
+
+    The codec round trip proves the wire format but bypasses gateways, routing and dispatch,
+    all of which could break while it stayed green. Here a Python source gateway publishes
+    ``Position`` datums, the **Java** engine and time machine order and route them, and a Python
+    actor receives them, with every decimal exact after crossing in both directions.
+
+    Still outstanding, deliberately: a *Java actor* deriving and republishing a finance datum.
+    That needs a Java actor class inside finance's jar, and finance has no compile-time
+    pulse-beacon dependency yet. It arrives with ``PositionManagerActor``.
+    """
+    script = (Path(__file__).parent / "scripts" / "engine_delivery.py").read_text(encoding="utf-8")
+    out = run_in_clean_env(finance_only_install, script)
+    assert out.returncode == 0, (out.stdout[-2000:], out.stderr[-3000:])
+    assert "ENGINE DELIVERED 3 COMPLETE" in out.stdout
+
+
 def test_two_extensions_compose_with_no_arguments(clean_install):
     """The justification for the whole design, so it is a test and not a remark.
 

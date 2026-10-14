@@ -176,9 +176,22 @@ with the four placeholders replaced by real scenarios. The evidence:
   is installed alongside finance, and both providers and both type sets are used.
 - **Exact decimals across both crossings**: `68.47` and `0.000000000001` survive Python to Java to
   Python unchanged.
-- **Mutation-tested.** Removing the second extension's `jvm_classpath` declaration while leaving
-  its types declared breaks three scenarios, which is the proof that the suite depends on discovery
-  actually working rather than on the environment happening to be right.
+- **Engine delivery, not only serialisation.** A Python source gateway publishes `Position`
+  datums, the Java engine and time machine order and route them, and a Python actor receives all
+  three in event-time order with exact decimals. The codec round trip alone bypassed gateways,
+  routing and dispatch.
+- **The build guards run where a jar exists.** They stage on demand and, under
+  `PULSE_FINANCE_RELEASE=1`, **fail** rather than skip when Maven or a JDK is missing. Run bare in
+  the release job they had reported nine skips and exit code zero, which is indistinguishable from
+  nine passes.
+- **Mutation-tested**, repeatedly, because a green acceptance suite that cannot fail is worthless:
+  removing the second extension's `jvm_classpath` declaration breaks three scenarios; reverting
+  the `execution` extra to bare pulse-beacon breaks six; making the contributor return an empty
+  list instead of raising breaks five; and silencing the recording actor breaks engine delivery.
+
+**Still outstanding**, deliberately: a *Java actor* deriving and republishing a finance datum. That
+needs a Java actor class inside finance's jar, and finance has no compile-time pulse-beacon
+dependency yet. It arrives with `PositionManagerActor`.
 
 What this does **not** prove, and must not be read as proving: that a user can obtain the required
 pulse-beacon from a package index. Development and CI build beacon's wheel from a pinned commit.

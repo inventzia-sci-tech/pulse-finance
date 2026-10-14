@@ -181,7 +181,15 @@ jobs:
           set -euo pipefail
           cd pulse-beacon && ./build-runtime-jar.sh
 
-      - name: Installation acceptance
+      # The build guards run HERE, not in the release job: they need a staged jar, and the
+      # release job provisions no JDK or Maven. Run bare they reported nine skips and exit code
+      # zero, which is indistinguishable from nine passes. Their fixture also stages on demand,
+      # so the guards and the artifact they guard cannot drift apart.
+      - name: Stage the finance jar
+        run: |
+          set -euo pipefail
+          cd pulse-finance && ./stage-runtime-jar.sh
+      - name: Build guards and installation acceptance
         env:
           # A missing prerequisite must fail here, not skip: this job exists to prove the
           # criterion, so a silent skip would make it decorative.
@@ -189,7 +197,8 @@ jobs:
         run: |
           set -euo pipefail
           pip install -q pytest build
-          cd pulse-finance && python -m pytest tests/test_installation.py -q
+          cd pulse-finance
+          python -m pytest tests/test_build_guard.py tests/test_installation.py -q
 
   # ---------------------------------------------------------------------------
   # Release gate. PULSE_FINANCE_RELEASE=1 turns every unproven acceptance criterion
@@ -243,10 +252,12 @@ jobs:
       # bare would either fail for the wrong reason or, worse, skip and look green. The
       # `installation` job already proves it with PULSE_FINANCE_RELEASE=1 and is in `needs`,
       # so this job cannot run unless that one passed.
-      - name: Contract and metadata checks must pass for a release
-        env:
-          PULSE_FINANCE_RELEASE: '1'
+      # Only the checks that need no JDK, Maven or sibling checkout. The build guards and the
+      # installation acceptance both run in the `installation` job, which provisions those and
+      # is in `needs`, so this job cannot run unless they passed. Re-running them bare here
+      # would fail for the wrong reason, or skip and look green.
+      - name: Contract checks must pass for a release
         run: |
           set -euo pipefail
           pip install -q pytest
-          python -m pytest tests/test_fixtures_consistency.py tests/test_build_guard.py -q
+          python -m pytest tests/test_fixtures_consistency.py -q
