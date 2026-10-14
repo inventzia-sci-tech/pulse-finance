@@ -2,28 +2,49 @@
 # Copyright (c) 2013-2026 Magrino Bini, Paola Apruzzese, Inventzia Science and Technology Ltd.
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+# Local backend: refuses a wheel whose bundled jar is missing, stale or incomplete.
+# See _build_backend.py. Existence alone, which is all pulse-beacon checks, is not enough.
+build-backend = "_build_backend"
+backend-path = ["."]
 
 [project]
 name = "pulse-finance"
 version = "0.1.0.dev0"
 description = "Financial domain for Pulse: position accounting, PnL, portfolio analytics, execution and exchange simulation."
 requires-python = ">=3.11"
-dependencies = ["pulse-data>=0.4.0"]
+# Deliberately light: the finance datum types are usable from Python with no JVM. Running an
+# engine needs pulse-beacon, which lives in the `execution` extra so a data-only consumer
+# does not pull in the JPype bridge.
+dependencies = ["pulse-data>=0.4.0,<0.5"]
+
+[project.optional-dependencies]
+# A pulse-beacon providing jvm_classpath discovery is not published yet. Development and CI
+# pin a pushed beacon commit and build its wheel (see initialtransitioning.md). This floor
+# must become a real published version, tested through this declaration, before publishing.
+execution = ["pulse-beacon>=0.4.0,<0.5"]
 
 [project.urls]
 Homepage = "https://inventzia.com"
 
 # Automatic provider discovery: pulse-data's registry reads this group via
 # importlib.metadata.entry_points(). An ordinary `pip install pulse-finance` is all a
-# consuming application needs — no manual registry manipulation. The Java side is the
+# consuming application needs, with no manual registry manipulation. The Java side is the
 # matching META-INF/services entry in core/java/src/main/resources.
 #
 [project.entry-points."inventzia.pulse.datum_types"]
 finance = "inventzia.pulse.finance.schemas.provider:FinanceDatumTypeProvider"
+
+# The Java half of the same contribution: a zero-argument callable returning jar paths, not a
+# filename, so the jar can be located inside an installed wheel via importlib.resources.
+[project.entry-points."inventzia.pulse.jvm_classpath"]
+finance = "inventzia.pulse.finance.jvm_classpath:jars"
 
 # PEP 420 namespace packages, sharing the inventzia.pulse.* prefix with pulse-data.
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["inventzia*"]
 namespaces = true
+
+# The thin finance jar travels in the wheel, with the digest of the inputs it was built from.
+[tool.setuptools.package-data]
+"inventzia.pulse.finance._runtime" = ["*.jar", "*.jar.inputs"]

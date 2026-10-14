@@ -13,3 +13,8 @@ logs/
 .classpath
 .settings/
 .pytest_cache/
+
+# Staged build artefacts, not source: run ./stage-runtime-jar.sh to produce them.
+# Same practice as pulse-beacon, which gitignores its own bundled runtime jar.
+src/inventzia/pulse/finance/_runtime/*.jar
+src/inventzia/pulse/finance/_runtime/*.jar.inputs
