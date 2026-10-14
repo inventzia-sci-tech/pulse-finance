@@ -8,16 +8,19 @@ DatumTypeProvider SPI. The criterion that makes that choice defensible:
     An APPLICATION DEVELOPER must be able to use these types through ordinary installation
     and startup, with no manual classpath assembly and no registry manipulation.
 
-Note the boundary. Finance's own bootstrap may legitimately locate and contribute its
-bundled JAR - that is the work the package exists to do. What must not happen is that work
-landing on the application developer. `pulse-ext-example` is the counter-example: it makes
-the *application* do it, by hardcoded path into its own Maven output -
+Note the boundary. Finance declares its own JAR and pulse-beacon discovers it; what must
+not happen is that work landing on the application developer. pulse-beacon now provides the
+mechanism: a package names its JAR under the `inventzia.pulse.jvm_classpath` entry-point
+group, and `start_jvm()` collects contributions itself. `pulse-ext-example` demonstrates it
+end to end, so an application passes no paths at all.
 
-    _EXT_JAR = Path(__file__).resolve().parents[1] / "java" / "target" / "...jar"
-    jpype_host.start_jvm(extra_classpath=[_EXT_JAR])
-
-- which proves discovery works given a hand-assembled classpath, and nothing about
-installation.
+What that example does NOT establish, and what these tests are for, is the *installed*
+experience. It is installed editable from a source checkout and its contribution locates a
+Maven-built JAR in `java/target/`; its packaging does not bundle one. So it is evidence of
+discovery and composition, not of a distributable artifact. These tests must therefore run
+against **installed wheels** in a clean environment outside the checkout, with no editable
+install and no Maven-output fallback, and must assert provider identities and exact decimal
+values rather than merely that startup succeeded.
 
 **Release gate.** The real tests below are placeholders until provider packaging lands.
 They SKIP during development, but under `PULSE_FINANCE_RELEASE=1` they FAIL instead, so a

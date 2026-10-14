@@ -372,6 +372,54 @@ and reusing one would make the scenarios interfere.
 | **Already-running JVM missing a contribution** | a JVM started without a contributed jar fails with an attributed, actionable restart instruction rather than a `NoClassDefFoundError` later |
 | **Missing packaged jar** | a package whose jar is absent fails at startup, naming the distribution |
 
+#### Build-time guard: existence is not enough
+
+pulse-beacon's `_build_backend.py` is the precedent but only the starting point: it checks
+`_RUNTIME_JAR.is_file()` and nothing more. A jar that exists but was built from older sources
+passes it. Finance's guard must additionally establish that the jar is **current** and **complete**:
+
+- **Freshness by digest, not timestamp.** Record a digest of the build inputs (the Java sources and
+  the generated bindings) alongside the staged jar, and fail the wheel build when it does not match.
+  File modification times are unreliable here: a checkout, a copy or a clock skew can make a stale
+  jar look new, and WSL and Windows disagree about them.
+- **Content verification.** Open the staged jar and assert it actually contains the provider class
+  and its `META-INF/services/com.inventzia.pulse.data.datum.DatumTypeProvider` entry. A jar built
+  from a broken Maven profile can be present, correctly dated, and still contribute nothing, which
+  surfaces as a type-universe mismatch rather than a packaging error.
+- **Thin.** Finance classes and resources only. Beacon's shaded jar already supplies pulse-data and
+  Jackson, and duplicating them invites version shadowing (see above).
+
+#### Acceptance must run against installed wheels
+
+Not editable installs, and not the Maven-output fallback. The scenarios are only evidence if the
+artifact under test is the artifact a user would receive:
+
+| Scenario | Requirements beyond "it runs" |
+|---|---|
+| Finance alone | wheel + jar installed into a clean environment **outside** the checkout, no Maven present, no editable install. Assert the **provider identity** (`providerId`, package version) and **exact decimal values** across the Python to Java to Python round trip, not merely that startup succeeded |
+| Finance plus a second extension | the second extension must also arrive **as a wheel containing its own jar**. Plain `start_jvm()`, then assert **both** provider identities are present and both type sets usable |
+| Repeated startup | **two `start_jvm()` calls in the same process**, isolated from the other scenarios, asserting idempotence and that verification still runs on reuse |
+| Already-running JVM missing a contribution | an attributed, actionable restart instruction naming the package, not a later `NoClassDefFoundError` |
+| Missing packaged jar | **both** halves: the wheel build is **rejected** when the jar is absent, and an installed-but-damaged artifact fails at **startup** with an actionable message |
+
+#### Dependency pinning: a commit for development, a published version for release
+
+`0.4.0-SNAPSHOT` is a Maven development coordinate. It is neither an immutable pin nor a Python
+dependency floor, so it cannot serve either purpose:
+
+- **Development and CI pin a pushed pulse-beacon commit** that contains discovery, and build its
+  wheel for the acceptance tests. As of this writing `9a89256` on `origin/main` qualifies: the
+  discovery commit `1f942ae` is reachable from it.
+- **Ordinary installation stays lightweight.** `pulse-finance` requires only `pulse-data`; the
+  pulse-beacon requirement belongs in an **execution extra**, so using the finance types from Python
+  without running an engine pulls in no JVM bridge.
+- **Before publishing**, require a **published** pulse-beacon version containing discovery and test
+  installation through that declared dependency.
+
+Worth stating plainly, because it is easy to conflate: passing the five scenarios resolves the four
+installation placeholders and the release gate, but it does **not** prove that a user can obtain the
+required pulse-beacon from the package index. That is a separate, later criterion.
+
 #### Consequences
 
 Change 1 is cross-repository and needs a pulse-beacon release before pulse-finance can depend on it,
