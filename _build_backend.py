@@ -38,7 +38,8 @@ _JAR = _RUNTIME_DIR / "pulse-finance-core.jar"
 _DIGEST = _RUNTIME_DIR / "pulse-finance-core.jar.inputs"
 
 _SERVICES_ENTRY = "META-INF/services/com.inventzia.pulse.data.datum.DatumTypeProvider"
-_PROVIDER_CLASS = "com/inventzia/pulse/finance/schemas/FinanceDatumTypeProvider.class"
+_PROVIDER_FQN = "com.inventzia.pulse.finance.schemas.FinanceDatumTypeProvider"
+_PROVIDER_CLASS = _PROVIDER_FQN.replace(".", "/") + ".class"
 
 _ABORT = "pulse-finance wheel build aborted: "
 _ESCAPE = ("\nStage it with ./stage-runtime-jar.sh, or set "
@@ -120,6 +121,21 @@ def _require_complete_jar() -> None:
                 "A jar can be present and current and still contribute no types, which surfaces "
                 "later as a cross-language type-universe mismatch rather than a packaging error."
                 + _ESCAPE)
+
+    # Presence is not enough: an EMPTY services file passes a name check and registers nothing,
+    # so ServiceLoader finds no provider and the types never reach Java. Read it.
+    with zipfile.ZipFile(_JAR) as z:
+        declared = z.read(_SERVICES_ENTRY).decode("utf-8", "replace")
+    registered = [line.split("#", 1)[0].strip() for line in declared.splitlines()]
+    registered = [line for line in registered if line]
+    if _PROVIDER_FQN not in registered:
+        raise SystemExit(
+            f"{_ABORT}the bundled jar's service registration does not name the provider.\n"
+            f"    {_SERVICES_ENTRY}\n"
+            f"    expected: {_PROVIDER_FQN}\n"
+            f"    found   : {registered or '(nothing)'}\n"
+            "An empty or wrong registration means ServiceLoader discovers no provider, so Java "
+            "comes up without the finance types while Python has them." + _ESCAPE)
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):

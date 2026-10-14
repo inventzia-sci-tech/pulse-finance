@@ -37,15 +37,8 @@ def _run(cmd, **kw):
 
 
 @pytest.fixture(scope="session")
-def clean_install(tmp_path_factory) -> dict:
-    """Wheels built, then installed into a venv **outside** the checkout.
-
-    Outside matters: a venv inside the source tree can import the package from the working
-    directory through a stray path entry, which would make these tests pass while the wheel is
-    broken.
-
-    :returns: ``{"python": <venv python>, "wheels": <dir>, "env": <venv root>}``
-    """
+def wheelhouse(tmp_path_factory) -> Path:
+    """Every distribution built as a wheel, once, into one directory outside the checkout."""
     for tool in ("mvn", "java"):
         if shutil.which(tool) is None:
             _unavailable(f"{tool} is required to build the jars (JAVA_HOME from the `pulse` env)")
@@ -53,11 +46,9 @@ def clean_install(tmp_path_factory) -> dict:
         if not (_SIBLINGS / sibling).is_dir():
             _unavailable(f"sibling checkout {sibling} not found beside pulse-finance")
 
-    base = tmp_path_factory.mktemp("acceptance")
-    assert _REPO not in base.parents and base != _REPO, "the venv must live outside the checkout"
-    wheels = base / "wheels"; wheels.mkdir()
+    base = tmp_path_factory.mktemp("wheelhouse")
+    assert _REPO not in base.parents, "must live outside the checkout"
 
-    # 1. stage finance's jar, then build every wheel from source.
     staged = _run(["bash", str(_REPO / "stage-runtime-jar.sh")], cwd=str(_REPO))
     if staged.returncode != 0:
         _unavailable(f"could not stage the finance jar: {staged.stderr[-400:]}")
@@ -67,31 +58,55 @@ def clean_install(tmp_path_factory) -> dict:
 
     for project in (_SIBLINGS / "pulse-data", _SIBLINGS / "pulse-beacon", _REPO):
         out = _run([sys.executable, "-m", "build", "--wheel", "--no-isolation",
-                    "--outdir", str(wheels), str(project)])
+                    "--outdir", str(base), str(project)])
         if out.returncode != 0:
             _unavailable(f"wheel build failed for {project.name}: {out.stdout[-500:]}")
     for whl in (_ACME / "dist").glob("*.whl"):
-        shutil.copy(whl, wheels)
+        shutil.copy(whl, base)
+    return base
 
-    # 2. a venv with nothing in it, outside the checkout.
+
+def _install(tmp_path_factory, wheels: Path, requirements: list[str], label: str) -> dict:
+    """A venv outside the checkout with *requirements* installed strictly offline.
+
+    Note what is NOT requested: ``jpype1``. The bridge must arrive through
+    ``pulse-finance[execution]`` depending on ``pulse-beacon[jpype]``. Installing it separately
+    here would hide a missing dependency, which is exactly what an earlier version did.
+    """
+    base = tmp_path_factory.mktemp(label)
+    assert _REPO not in base.parents, "the venv must live outside the checkout"
     env_dir = base / "env"
     out = _run([sys.executable, "-m", "venv", str(env_dir)])
     if out.returncode != 0:
         _unavailable(f"could not create a venv: {out.stderr[-300:]}")
     py = env_dir / ("Scripts" if os.name == "nt" else "bin") / "python"
 
-    # 3. resolve the dependency closure once, then install strictly offline so nothing can
-    #    silently come from the index or the source tree.
     out = _run([str(py), "-m", "pip", "download", "--dest", str(wheels),
-                "--find-links", str(wheels), "pulse-finance[execution]", "acme-telemetry", "jpype1"])
+                "--find-links", str(wheels), *requirements])
     if out.returncode != 0:
-        _unavailable(f"could not resolve the dependency closure: {out.stdout[-500:]}")
-    out = _run([str(py), "-m", "pip", "install", "--no-index", "--find-links", str(wheels),
-                "pulse-finance[execution]", "acme-telemetry", "jpype1"])
+        _unavailable(f"could not resolve the closure for {label}: {out.stdout[-500:]}")
+    out = _run([str(py), "-m", "pip", "install", "--no-index",
+                "--find-links", str(wheels), *requirements])
     if out.returncode != 0:
-        _unavailable(f"offline install failed: {out.stdout[-600:]}")
-
+        _unavailable(f"offline install failed for {label}: {out.stdout[-600:]}")
     return {"python": str(py), "wheels": str(wheels), "env": str(env_dir)}
+
+
+@pytest.fixture(scope="session")
+def clean_install(tmp_path_factory, wheelhouse) -> dict:
+    """Finance **and** a second extension, for the composition scenarios."""
+    return _install(tmp_path_factory, wheelhouse,
+                    ["pulse-finance[execution]", "acme-telemetry"], "with-acme")
+
+
+@pytest.fixture(scope="session")
+def finance_only_install(tmp_path_factory, wheelhouse) -> dict:
+    """Finance **alone**.
+
+    A separate environment on purpose: the composition fixture always installs the second
+    extension, so without this one "finance alone works" was never actually tested.
+    """
+    return _install(tmp_path_factory, wheelhouse, ["pulse-finance[execution]"], "finance-only")
 
 
 def run_in_clean_env(clean_install: dict, script: str, env_extra: dict | None = None):

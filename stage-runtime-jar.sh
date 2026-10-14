@@ -21,12 +21,25 @@ inputs_digest() {
     python -c "import sys; sys.path.insert(0, '$HERE'); import _build_backend; print(_build_backend.inputs_digest())"
 }
 
-echo "building the finance jar"
-mvn -B -ntp -f "$HERE/core/java/pom.xml" package -DskipTests >/dev/null
+# The exact artifact for the version in the POM, from a CLEAN build.
+#
+# Both halves matter. Without `clean`, a version change leaves the previous version's jar in
+# target/ alongside the new one, and picking "the first match" could stage the old artifact and
+# then record the CURRENT input digest against it, certifying a stale jar as fresh. Globbing for
+# a version is likewise wrong: ask the POM which version this is and demand that exact file.
+version="$(mvn -B -ntp -q -f "$HERE/core/java/pom.xml" \
+             help:evaluate -Dexpression=project.version -DforceStdout 2>/dev/null | tail -1 | tr -d '[:space:]')"
+test -n "$version" || { echo "could not read project.version from the POM" >&2; exit 1; }
+echo "building the finance jar (version $version, clean)"
+mvn -B -ntp -f "$HERE/core/java/pom.xml" clean package -DskipTests >/dev/null
 
-built="$(find "$HERE/core/java/target" -maxdepth 1 -name 'pulse-finance-core-*.jar' \
-         -not -name '*-sources.jar' -not -name '*-javadoc.jar' | head -1)"
-test -n "$built" || { echo "no jar produced by Maven" >&2; exit 1; }
+built="$HERE/core/java/target/pulse-finance-core-$version.jar"
+if [[ ! -f "$built" ]]; then
+    echo "Maven did not produce the expected artifact:" >&2
+    echo "    $built" >&2
+    echo "  target/ contains: $(ls "$HERE/core/java/target"/*.jar 2>/dev/null || echo none)" >&2
+    exit 1
+fi
 
 mkdir -p "$RUNTIME_DIR"
 cp "$built" "$RUNTIME_DIR/$JAR_NAME"

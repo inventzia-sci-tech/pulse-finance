@@ -21,7 +21,11 @@ dependencies = ["pulse-data>=0.4.0,<0.5"]
 # A pulse-beacon providing jvm_classpath discovery is not published yet. Development and CI
 # pin a pushed beacon commit and build its wheel (see initialtransitioning.md). This floor
 # must become a real published version, tested through this declaration, before publishing.
-execution = ["pulse-beacon>=0.4.0,<0.5"]
+# pulse-beacon[jpype] rather than bare pulse-beacon: the bridge is what starts the JVM, and
+# without the extra an installed consumer gets no JPype and cannot run anything. The
+# acceptance fixture deliberately does NOT install jpype1 separately, so a missing bridge
+# here would fail the tests rather than hide behind the fixture.
+execution = ["pulse-beacon[jpype]>=0.4.0,<0.5"]
 
 [project.urls]
 Homepage = "https://inventzia.com"

@@ -22,10 +22,14 @@ env:
   # one authoritative home in generator.pin, which the generator-pin job reads directly.
   PULSE_DATA_REPO: inventzia-sci-tech/pulse-data
   PULSE_BEACON_REPO: inventzia-sci-tech/pulse-beacon
-  # Both currently track main because pulse-data and pulse-beacon are unreleased
-  # (0.4.0-SNAPSHOT). The release job refuses to publish while either is still 'main'.
-  PULSE_DATA_REF: main
-  PULSE_BEACON_REF: main
+  # Pinned to immutable commits, not branches. A Maven -SNAPSHOT coordinate is a development
+  # version, not a pin, and 'main' moves: either would make a build unreproducible and could
+  # swap the discovery mechanism out from under the acceptance tests.
+  #
+  # PULSE_BEACON_REF must contain the inventzia.pulse.jvm_classpath discovery mechanism.
+  # 9a89256 does: the discovery commit 1f942ae is an ancestor of it.
+  PULSE_DATA_REF: 5486aecb2c93dfcb630b74f9ee430b3b258ecad0
+  PULSE_BEACON_REF: 9a892563e01d5259af6d4b98211eedd235ce52ff
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -234,11 +238,15 @@ jobs:
           EOF
           python scripts/check_versions.py
 
-      # The acceptance criteria must PASS here, not skip.
-      - name: Installation acceptance criteria must pass for a release
+      # Installation acceptance is NOT re-run here. It needs the sibling checkouts, a JDK,
+      # Maven and a staged beacon runtime jar, none of which this job provisions; re-running it
+      # bare would either fail for the wrong reason or, worse, skip and look green. The
+      # `installation` job already proves it with PULSE_FINANCE_RELEASE=1 and is in `needs`,
+      # so this job cannot run unless that one passed.
+      - name: Contract and metadata checks must pass for a release
         env:
           PULSE_FINANCE_RELEASE: '1'
         run: |
           set -euo pipefail
           pip install -q pytest
-          python -m pytest tests/ -q
+          python -m pytest tests/test_fixtures_consistency.py tests/test_build_guard.py -q

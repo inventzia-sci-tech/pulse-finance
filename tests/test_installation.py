@@ -131,32 +131,75 @@ for name in ("pulse-data", "pulse-beacon", "pulse-finance", "acme-telemetry"):
     assert "pulse-finance" in out.stdout and "acme-telemetry" in out.stdout
 
 
-def test_finance_round_trip_preserves_exact_decimals(clean_install):
-    """Python to Java to Python, asserting the values and the provider identity.
+def test_the_bridge_arrives_with_the_execution_extra(clean_install):
+    """JPype must come from ``pulse-finance[execution]``, not from the test asking for it.
 
-    Exact, not approximate: a float round trip would satisfy a tolerance check and still be the
-    defect this whole port exists to eliminate.
+    The fixture deliberately does not install ``jpype1``. If the extra depended on bare
+    pulse-beacon, there would be no bridge here and nothing could start.
     """
     out = run_in_clean_env(clean_install, r"""
-from decimal import Decimal
-from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
-jh.start_jvm()                                   # no arguments, no paths
-import jpype
-Registry = jpype.JClass("com.inventzia.pulse.data.datum.DatumTypeRegistry")
-providers = sorted(str(p.providerId()) for p in Registry.defaultRegistry().providers())
-assert "com.inventzia.pulse.finance" in providers, providers
-
-Position = jpype.JClass("com.inventzia.pulse.finance.schemas.Position")
-BigDecimal = jpype.JClass("java.math.BigDecimal")
-sent = Decimal("68.47")
-p = Position("CL", jpype.JLong(1283630000000), jpype.JLong(100), BigDecimal(str(sent)), "ID_TRD")
-assert Decimal(str(p.positionVwap())) == sent, p.positionVwap()
-assert str(p.getDatumKey()) == "CL" and int(p.getDatumTime()) == 1283630000000
-assert int(p.signedPosition()) == 100
-print("ROUND TRIP EXACT", providers)
+import importlib.metadata as md
+import jpype                                      # must be present via the extra alone
+print("JPYPE", md.version("JPype1"), "BEACON", md.version("pulse-beacon"))
 """)
     assert out.returncode == 0, out.stderr
-    assert "ROUND TRIP EXACT" in out.stdout
+    assert "JPYPE" in out.stdout
+
+
+def test_a_finance_event_round_trips_through_the_engine_wire_format(finance_only_install):
+    """A real event round trip, finance **alone**, over the self-describing wire format.
+
+    Constructing a Java record and reading its fields back proves almost nothing: it never builds
+    the Python model, never serialises, and never decodes a returned datum, so the codec and the
+    registry lookup could both be broken while it stayed green. An earlier version of this test
+    did exactly that. This one goes Python model -> tagged JSON -> Java ``fromTaggedJson`` ->
+    a derived Java datum -> tagged JSON -> Python ``from_tagged_json``.
+
+    It also runs in the finance-only environment, because the composition fixture always installs
+    the second extension and so never tested finance by itself.
+    """
+    out = run_in_clean_env(finance_only_install, r"""
+from decimal import Decimal
+from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+jh.start_jvm()
+import jpype
+from inventzia.pulse.data.datum.codec import to_tagged_json, from_tagged_json
+from inventzia.pulse.finance.schemas.position import Position
+
+VWAP = Decimal("68.47")
+sent = Position(instrumentId="CL", positionTime=1283630000000,
+                signedPosition=100, positionVwap=VWAP, positionPoint="ID_TRD")
+
+# 1. Python -> wire
+envelope = to_tagged_json(sent)
+assert '"com.inventzia.pulse.finance.schemas.Position"' in envelope, envelope
+
+# 2. wire -> Java, resolved through the registry from the typeId alone
+# DatumCodec.instance(), the same accessor beacon's own CrossLanguageGateway uses.
+Codec = jpype.JClass("com.inventzia.pulse.data.datum.DatumCodec")
+codec = Codec.instance()
+received = codec.fromTaggedJson(envelope)
+assert str(received.getDatumKey()) == "CL", received.getDatumKey()
+assert Decimal(str(received.positionVwap())) == VWAP, received.positionVwap()
+
+# 3. Java derives a new datum and sends it back
+PositionJ = jpype.JClass("com.inventzia.pulse.finance.schemas.Position")
+BigDecimal = jpype.JClass("java.math.BigDecimal")
+derived = PositionJ(received.instrumentId(), received.positionTime(),
+                    jpype.JLong(-50), received.positionVwap().add(BigDecimal("0.01")), "EOD")
+back = str(codec.toTaggedJson(derived))
+
+# 4. wire -> Python
+decoded = from_tagged_json(back)
+assert type(decoded) is Position, type(decoded)
+assert decoded.instrument_id == "CL"
+assert decoded.signed_position == -50
+assert decoded.position_vwap == Decimal("68.48"), decoded.position_vwap
+assert decoded.position_point == "EOD"
+print("EVENT ROUND TRIP EXACT", decoded.position_vwap)
+""")
+    assert out.returncode == 0, out.stderr
+    assert "EVENT ROUND TRIP EXACT 68.48" in out.stdout
 
 
 def test_two_extensions_compose_with_no_arguments(clean_install):
@@ -261,19 +304,36 @@ finally:
     assert "DAMAGED ARTIFACT REFUSED" in out.stdout
 
 
-def test_no_maven_and_no_checkout_path_is_required(clean_install):
-    """The happy path must not need Maven, nor any path into a ``target/`` directory."""
+def test_the_happy_path_needs_no_maven_and_no_checkout_path(clean_install):
+    """Maven removed from PATH, JDK kept: ``start_jvm()`` must still succeed.
+
+    An earlier version only resolved paths and accepted any stderr mentioning ``JAVA_HOME``,
+    which meant a total failure to start counted as a pass.
+    """
     out = run_in_clean_env(
         clean_install,
         r"""
 from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+import shutil, sys
+assert shutil.which("mvn") is None, "Maven is still on PATH; the test proves nothing"
+
 jars, source = jh.resolve_classpath()
 assert jars, "no classpath resolved"
 for jar in jars:
-    assert "/target/" not in jar.replace("\\", "/"), f"resolved a Maven output path: {jar}"
-print("NO MAVEN NEEDED", len(jars))
+    normalised = jar.replace("\\", "/")
+    assert "/target/" not in normalised, f"resolved a Maven output path: {jar}"
+    assert sys.prefix.replace("\\", "/") in normalised, (
+        f"jar resolved from outside the installed environment: {jar}")
+
+jh.start_jvm()                                    # must actually start, not merely resolve
+import jpype
+assert jpype.isJVMStarted()
+print("STARTED WITHOUT MAVEN", len(jars))
 """,
-        env_extra={"PATH": "/usr/bin:/bin"},          # Maven and the JDK removed from PATH
+        # PATH stripped to the system directories, so Maven is gone. The JDK does not need to
+        # be on PATH: JPype locates the JVM through JAVA_HOME, which is inherited. Adding the
+        # JDK's bin back would reinstate Maven, since the `pulse` env ships both in one directory.
+        env_extra={"PATH": "/usr/bin:/bin"},
     )
-    # JAVA_HOME still points at a JDK, which is a documented runtime requirement; Maven is not.
-    assert "NO MAVEN NEEDED" in out.stdout or "JAVA_HOME" in out.stderr, (out.stdout, out.stderr)
+    assert out.returncode == 0, (out.stdout, out.stderr)
+    assert "STARTED WITHOUT MAVEN" in out.stdout
