@@ -106,49 +106,174 @@ def test_the_release_gate_itself_is_wired():
 
 
 # ---------------------------------------------------------------------------
-# The criterion proper. Placeholders, release-gated.
+# The criterion proper. Each JVM scenario runs in its own process, because a JVM cannot be
+# started twice in one interpreter and sharing one would let the scenarios interfere.
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def clean_install(tmp_path_factory):
-    """Build the distributions and install them into a venv OUTSIDE the checkout.
+from conftest import run_in_clean_env            # noqa: E402  (fixture helper)
 
-    Outside the checkout matters: a venv created inside the source tree can import the
-    package from the working directory via a stray path entry, which would make this test
-    pass while the wheel is in fact broken.
+
+def test_the_installed_environment_is_built_from_wheels_only(clean_install):
+    """Nothing editable, nothing resolved from the source tree.
+
+    Checked first: every assertion below is worthless if the environment is secretly importing
+    the checkout.
     """
-    if not _schema_committed():
-        _pending("no finance schema committed yet (D1-D5 open)")
-    _pending("clean-environment install not implemented: build wheel+jar, create a venv "
-             "outside the repo, pip install both")
+    out = run_in_clean_env(clean_install, r"""
+import importlib.metadata as md
+for name in ("pulse-data", "pulse-beacon", "pulse-finance", "acme-telemetry"):
+    d = md.distribution(name)
+    direct = d.read_text("direct_url.json") or ""
+    assert "editable" not in direct, f"{name} is installed editable"
+    print(f"{name} {d.version}")
+""")
+    assert out.returncode == 0, out.stderr
+    assert "pulse-finance" in out.stdout and "acme-telemetry" in out.stdout
 
 
-def test_python_side_discovers_the_provider_without_manual_registration(clean_install):
-    """pip install, and the registry already knows the finance types."""
-    _pending("python discovery round trip")
+def test_finance_round_trip_preserves_exact_decimals(clean_install):
+    """Python to Java to Python, asserting the values and the provider identity.
 
-
-def test_java_side_discovers_the_provider_from_the_installed_jar(clean_install):
-    """The JAR reaches the classpath without the application naming a path.
-
-    This is precisely what the ext example does not demonstrate. Whichever mechanism is
-    chosen - JAR shipped as wheel package data and contributed by finance's own bootstrap,
-    or a classpath entry-point group that jpype_host consults - the assertion is the same:
-    the application passes no `extra_classpath`.
+    Exact, not approximate: a float round trip would satisfy a tolerance check and still be the
+    defect this whole port exists to eliminate.
     """
-    _pending("java discovery from an installed jar")
+    out = run_in_clean_env(clean_install, r"""
+from decimal import Decimal
+from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+jh.start_jvm()                                   # no arguments, no paths
+import jpype
+Registry = jpype.JClass("com.inventzia.pulse.data.datum.DatumTypeRegistry")
+providers = sorted(str(p.providerId()) for p in Registry.defaultRegistry().providers())
+assert "com.inventzia.pulse.finance" in providers, providers
+
+Position = jpype.JClass("com.inventzia.pulse.finance.schemas.Position")
+BigDecimal = jpype.JClass("java.math.BigDecimal")
+sent = Decimal("68.47")
+p = Position("CL", jpype.JLong(1283630000000), jpype.JLong(100), BigDecimal(str(sent)), "ID_TRD")
+assert Decimal(str(p.positionVwap())) == sent, p.positionVwap()
+assert str(p.getDatumKey()) == "CL" and int(p.getDatumTime()) == 1283630000000
+assert int(p.signedPosition()) == 100
+print("ROUND TRIP EXACT", providers)
+""")
+    assert out.returncode == 0, out.stderr
+    assert "ROUND TRIP EXACT" in out.stdout
 
 
-def test_round_trip_python_to_java_to_python_preserves_values(clean_install):
-    """Publish a finance datum from Python, have a Java actor observe it, return a derived
-    finance datum, and assert exact equality across both crossings.
+def test_two_extensions_compose_with_no_arguments(clean_install):
+    """The justification for the whole design, so it is a test and not a remark.
 
-    Exact, not approximate: a float round trip would satisfy a tolerance check and still be
-    the defect this entire port exists to eliminate.
+    A second extension under a third-party namespace (``com.acme.telemetry``) is installed
+    alongside finance. Plain ``start_jvm()`` must load both, which the previous per-application
+    ``extra_classpath`` approach could only do if the caller knew about both packages.
     """
-    _pending("python -> java -> python finance-event round trip")
+    out = run_in_clean_env(clean_install, r"""
+from decimal import Decimal
+from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+jh.start_jvm()
+import jpype
+from inventzia.pulse.data.datum.registry import default_registry
+
+Registry = jpype.JClass("com.inventzia.pulse.data.datum.DatumTypeRegistry")
+java = sorted(str(p.providerId()) for p in Registry.defaultRegistry().providers())
+python = sorted(p.provider_id for p in default_registry().providers())
+assert java == python, (java, python)
+for required in ("com.inventzia.pulse.finance", "com.acme.telemetry"):
+    assert required in java, (required, java)
+
+# Both type sets usable, both exact.
+BigDecimal = jpype.JClass("java.math.BigDecimal")
+Position = jpype.JClass("com.inventzia.pulse.finance.schemas.Position")
+Widget = jpype.JClass("com.acme.telemetry.schemas.WidgetReading")
+pos = Position("CL", jpype.JLong(1), jpype.JLong(-5), BigDecimal("68.47"), "EOD")
+wid = Widget("W-1", jpype.JLong(2), BigDecimal("0.000000000001"))
+assert Decimal(str(pos.positionVwap())) == Decimal("68.47")
+assert Decimal(str(wid.value())) == Decimal("0.000000000001")
+print("COMPOSED", java)
+""")
+    assert out.returncode == 0, out.stderr
+    assert "COMPOSED" in out.stdout
+    assert "com.acme.telemetry" in out.stdout
 
 
-def test_no_maven_and_no_hand_located_jars_are_required(clean_install):
-    """Fails if the happy path needs mvn, or any path containing `target/`."""
-    _pending("no-maven startup")
+def test_repeated_startup_in_one_process_is_idempotent(clean_install):
+    """Two calls in the same process, isolated from the other scenarios."""
+    out = run_in_clean_env(clean_install, r"""
+from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+jh.start_jvm()
+jh.start_jvm()                                   # must reuse, and must still verify
+import jpype
+assert jpype.isJVMStarted()
+print("IDEMPOTENT")
+""")
+    assert out.returncode == 0, out.stderr
+    assert "IDEMPOTENT" in out.stdout
+
+
+def test_a_running_jvm_missing_a_contribution_is_refused_with_attribution(clean_install):
+    """A foreign JVM started without the contributed jars must fail, naming the package.
+
+    The alternative is a ``NoClassDefFoundError`` much later with nothing to attribute it to.
+    """
+    out = run_in_clean_env(clean_install, r"""
+import jpype
+from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+# A host application boots the JVM itself, with only Beacon's own jar.
+beacon_only = jh.beacon_jars()[0]
+jpype.startJVM(classpath=beacon_only, convertStrings=True)
+try:
+    jh.start_jvm()
+    raise SystemExit("start_jvm() accepted a JVM missing the contributed jars")
+except RuntimeError as exc:
+    message = str(exc)
+    assert "pulse-finance" in message, message
+    assert "Restart" in message, message
+    print("ATTRIBUTED AND ACTIONABLE")
+""")
+    assert out.returncode == 0, out.stderr
+    assert "ATTRIBUTED AND ACTIONABLE" in out.stdout
+
+
+def test_a_damaged_installed_artifact_fails_at_startup_with_attribution(clean_install):
+    """The second half of the missing-jar case: the wheel built, but the artifact is damaged.
+
+    The first half, rejection during wheel construction, is covered by
+    ``test_build_guard.py`` against the build backend directly.
+    """
+    out = run_in_clean_env(clean_install, r"""
+import pathlib, importlib.resources as res
+jar = pathlib.Path(str(res.files("inventzia.pulse.finance._runtime")
+                       .joinpath("pulse-finance-core.jar")))
+moved = jar.with_suffix(".jar.moved")
+jar.rename(moved)
+try:
+    from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+    try:
+        jh.resolve_classpath()
+        raise SystemExit("a missing installed jar was accepted")
+    except jh.ClasspathContributionError as exc:
+        message = str(exc)
+        assert "pulse-finance" in message, message
+        print("DAMAGED ARTIFACT REFUSED")
+finally:
+    moved.rename(jar)
+""")
+    assert out.returncode == 0, out.stderr
+    assert "DAMAGED ARTIFACT REFUSED" in out.stdout
+
+
+def test_no_maven_and_no_checkout_path_is_required(clean_install):
+    """The happy path must not need Maven, nor any path into a ``target/`` directory."""
+    out = run_in_clean_env(
+        clean_install,
+        r"""
+from inventzia.pulse.beacon.core.crosslanguage import jpype_host as jh
+jars, source = jh.resolve_classpath()
+assert jars, "no classpath resolved"
+for jar in jars:
+    assert "/target/" not in jar.replace("\\", "/"), f"resolved a Maven output path: {jar}"
+print("NO MAVEN NEEDED", len(jars))
+""",
+        env_extra={"PATH": "/usr/bin:/bin"},          # Maven and the JDK removed from PATH
+    )
+    # JAVA_HOME still points at a JDK, which is a documented runtime requirement; Maven is not.
+    assert "NO MAVEN NEEDED" in out.stdout or "JAVA_HOME" in out.stderr, (out.stdout, out.stderr)

@@ -133,13 +133,68 @@ jobs:
         run: mvn -B -ntp -f pulse-finance/core/java/pom.xml verify
 
   # ---------------------------------------------------------------------------
+  # Installation acceptance: the criterion behind the datum-ownership decision.
+  # Builds real wheels and installs them offline into a venv outside the checkout, then runs
+  # each JVM scenario in its own process. Needs Maven to build the jars and the sibling
+  # repositories to build their wheels.
+  # ---------------------------------------------------------------------------
+  installation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pulse-finance
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PULSE_DATA_REPO }}
+          ref: ${{ env.PULSE_DATA_REF }}
+          path: pulse-data
+          token: ${{ secrets.CI_PAT || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PULSE_BEACON_REPO }}
+          ref: ${{ env.PULSE_BEACON_REF }}
+          path: pulse-beacon
+          token: ${{ secrets.CI_PAT || github.token }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # pulse-beacon's wheel bundles a shaded runtime jar; without it the JVM cannot start and
+      # the acceptance tests would be measuring nothing.
+      - name: Install pulse-data and pulse-beacon-core to the local .m2
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -f pulse-data/pom.xml install -DskipTests
+          mvn -B -ntp -f pulse-beacon/core/java/pom.xml install -DskipTests
+      - name: Stage pulse-beacon's runtime jar
+        run: |
+          set -euo pipefail
+          cd pulse-beacon && ./build-runtime-jar.sh
+
+      - name: Installation acceptance
+        env:
+          # A missing prerequisite must fail here, not skip: this job exists to prove the
+          # criterion, so a silent skip would make it decorative.
+          PULSE_FINANCE_RELEASE: '1'
+        run: |
+          set -euo pipefail
+          pip install -q pytest build
+          cd pulse-finance && python -m pytest tests/test_installation.py -q
+
+  # ---------------------------------------------------------------------------
   # Release gate. PULSE_FINANCE_RELEASE=1 turns every unproven acceptance criterion
   # into a hard failure, so a tag cannot be cut while the installation criterion is
   # only "skipped". See tests/test_installation.py and initialtransitioning.md.
   # ---------------------------------------------------------------------------
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [contracts, generator-pin, maven]
+    needs: [contracts, generator-pin, maven, installation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

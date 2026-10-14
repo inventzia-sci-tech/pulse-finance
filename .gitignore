@@ -18,3 +18,7 @@ logs/
 # Same practice as pulse-beacon, which gitignores its own bundled runtime jar.
 src/inventzia/pulse/finance/_runtime/*.jar
 src/inventzia/pulse/finance/_runtime/*.jar.inputs
+tests/fixtures/acme-telemetry/build-classes/
+tests/fixtures/acme-telemetry/dist/
+tests/fixtures/acme-telemetry/src/acme/telemetry/_runtime/*.jar
+tests/fixtures/acme-telemetry/src/*.egg-info/

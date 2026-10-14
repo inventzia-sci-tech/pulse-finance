@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Inventzia-Commercial
+# Copyright (c) 2013-2026 Magrino Bini, Paola Apruzzese, Inventzia Science and Technology Ltd.
+#
+# A SECOND extension, used only by pulse-finance's installation acceptance tests.
+#
+# Its purpose is composition: the design exists so that several packages can each contribute
+# their own types and jar, and a single finance round trip cannot demonstrate that. It is
+# deliberately under a third-party namespace (com.acme.telemetry) to show that an adopter owns
+# its namespace end to end and needs no inventzia prefix anywhere.
+
+$schema: "http://json-schema.org/draft-07/schema#"
+$id: "com.acme.telemetry.schemas.WidgetReading"
+title: WidgetReading
+description: >
+  A minimal third-party datum: one instrument-like key, one event time, one exact decimal.
+  Small on purpose; it exists to be discovered alongside the finance types, not to model
+  anything.
+type: object
+x-version: 1
+
+properties:
+
+  widgetId:
+    type: string
+    description: Identifier of the widget reporting.
+    x-datum-key: true
+
+  readingTime:
+    type: integer
+    format: int64
+    description: Time of the reading, epoch milliseconds.
+    x-datum-time: true
+
+  value:
+    type: number
+    format: decimal
+    description: The reading, as an exact decimal.
+
+required:
+  - widgetId
+  - readingTime
+  - value
+
+additionalProperties: false

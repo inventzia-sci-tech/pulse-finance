@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acme-telemetry"
+version = "1.0.0"
+description = "Second extension fixture: a third-party datum type under com.acme.telemetry."
+requires-python = ">=3.11"
+dependencies = ["pulse-data>=0.4.0,<0.5"]
+
+# Both halves, under a namespace Acme owns. Only the two group names are Pulse's.
+[project.entry-points."inventzia.pulse.datum_types"]
+acme = "acme.telemetry.schemas.provider:AcmeDatumTypeProvider"
+
+[project.entry-points."inventzia.pulse.jvm_classpath"]
+acme = "acme.telemetry.jvm_classpath:jars"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["acme*"]
+
+[tool.setuptools.package-data]
+"acme.telemetry._runtime" = ["*.jar"]
